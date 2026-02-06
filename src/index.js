@@ -82,14 +82,20 @@ app.post('/api/sitemap', async (req, res) => {
 // 4. FORM LINK: Generate a shareable link for the client
 // ============================================
 app.post('/api/form/create', (req, res) => {
-    const { domain, clientName } = req.body;
+    const { domain, clientName, clientData, competitors } = req.body;
     if (!domain) return res.status(400).json({ error: 'Domain is required' });
 
     const token = uuidv4();
-    formTokens.set(token, { domain, clientName: clientName || domain, createdAt: new Date() });
+    formTokens.set(token, {
+        domain,
+        clientName: clientName || domain,
+        clientData: clientData || null,
+        competitors: competitors || [],
+        createdAt: new Date(),
+    });
 
     const formUrl = `${FRONTEND_BASE_URL}/form/${token}`;
-    console.log(`[BTA] Form link created: ${formUrl}`);
+    console.log(`[BTA] Form link created: ${formUrl} (data: ${clientData ? 'yes' : 'no'})`);
 
     res.json({ status: 'success', token, formUrl });
 });
