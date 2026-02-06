@@ -8,10 +8,9 @@ require('dotenv').config();
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 3000;
-const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || 'http://localhost:5173';
 
 // In-memory store for form tokens (maps token -> domain)
 const formTokens = new Map();
@@ -86,18 +85,18 @@ app.post('/api/form/create', (req, res) => {
     if (!domain) return res.status(400).json({ error: 'Domain is required' });
 
     const token = uuidv4();
-    formTokens.set(token, {
+    const tokenData = {
         domain,
         clientName: clientName || domain,
         clientData: clientData || null,
         competitors: competitors || [],
         createdAt: new Date(),
-    });
+    };
+    formTokens.set(token, tokenData);
 
-    const formUrl = `${FRONTEND_BASE_URL}/form/${token}`;
-    console.log(`[BTA] Form link created: ${formUrl} (data: ${clientData ? 'yes' : 'no'})`);
+    console.log(`[BTA] Form link created for ${domain} | token: ${token} | clientData: ${clientData ? 'YES (' + Object.keys(clientData).join(',') + ')' : 'NO'} | competitors: ${(competitors || []).length}`);
 
-    res.json({ status: 'success', token, formUrl });
+    res.json({ status: 'success', token });
 });
 
 // Get form info by token (frontend calls this to show the form)
