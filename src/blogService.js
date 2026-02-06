@@ -53,6 +53,26 @@ async function scrapeRealBlogUrls(domain, limit) {
 }
 
 // ============================================
+// STEP 1.5: Verify URLs are real (HTTP HEAD check)
+// ============================================
+async function verifyUrls(urls) {
+    const verified = [];
+    const checks = urls.map(async (url) => {
+        try {
+            const res = await axios.head(url, { timeout: 5000, maxRedirects: 3 });
+            if (res.status >= 200 && res.status < 400) {
+                verified.push(url);
+            }
+        } catch {
+            // URL doesn't resolve — skip it
+        }
+    });
+    await Promise.all(checks);
+    console.log(`[Blog] Verified ${verified.length}/${urls.length} URLs are live`);
+    return verified;
+}
+
+// ============================================
 // STEP 2: Use AI to enrich scraped URLs with titles/descriptions
 // ============================================
 async function enrichWithAI(domain, urls) {
@@ -136,12 +156,20 @@ RULES:
 async function getBlogPosts(domain, limit = 20) {
     console.log(`[Blog] Finding blog posts for: ${domain}`);
 
-    // Step 1: Get real URLs
-    const realUrls = await scrapeRealBlogUrls(domain, limit);
-    console.log(`[Blog] Scraped ${realUrls.length} real URLs for ${domain}`);
+    // Step 1: Get real URLs from sitemap/blog page
+    const scraped = await scrapeRealBlogUrls(domain, limit);
+    console.log(`[Blog] Scraped ${scraped.length} candidate URLs for ${domain}`);
+
+    if (scraped.length === 0) {
+        console.log(`[Blog] No blog URLs found for ${domain}`);
+        return [];
+    }
+
+    // Step 1.5: Verify each URL actually loads (HTTP HEAD)
+    const realUrls = await verifyUrls(scraped);
 
     if (realUrls.length === 0) {
-        console.log(`[Blog] No blog URLs found for ${domain}`);
+        console.log(`[Blog] None of the scraped URLs are live`);
         return [];
     }
 
