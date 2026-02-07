@@ -164,7 +164,46 @@ app.get('/api/clients', async (req, res) => {
 });
 
 // ============================================
-// 7. HEALTH CHECK
+// 7. ELEVENLABS: Get signed URL for conversation
+// ============================================
+app.get('/api/elevenlabs/session', async (req, res) => {
+    const apiKey = process.env.ELEVEN_LABS_API_KEY;
+    const agentId = process.env.ELEVEN_LABS_AGENT_ID;
+
+    if (!apiKey || !agentId) {
+        return res.status(500).json({
+            error: 'ElevenLabs not configured',
+            details: 'Missing ELEVEN_LABS_API_KEY or ELEVEN_LABS_AGENT_ID'
+        });
+    }
+
+    try {
+        console.log('[ElevenLabs] Generating signed URL...');
+        const response = await fetch(
+            `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${agentId}`,
+            {
+                method: 'GET',
+                headers: { 'xi-api-key': apiKey }
+            }
+        );
+
+        if (!response.ok) {
+            const error = await response.text();
+            console.error('[ElevenLabs] API error:', error);
+            return res.status(response.status).json({ error: 'ElevenLabs API error', details: error });
+        }
+
+        const data = await response.json();
+        console.log('[ElevenLabs] Signed URL generated successfully');
+        res.json({ signedUrl: data.signed_url });
+    } catch (error) {
+        console.error('[ElevenLabs] Error:', error.message);
+        res.status(500).json({ error: 'Failed to get signed URL', details: error.message });
+    }
+});
+
+// ============================================
+// 8. HEALTH CHECK
 // ============================================
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });

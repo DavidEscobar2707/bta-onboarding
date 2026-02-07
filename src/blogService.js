@@ -1,51 +1,80 @@
 const axios = require("axios");
-const { GoogleGenAI } = require("@google/genai");
 
 // ============================================
-// STEP 1: Scrape real blog URLs from sitemap + common blog paths
+// Helpers
 // ============================================
-async function scrapeRealBlogUrls(domain, limit) {
+function safeDecodeSlug(url) {
+    try {
+        const slug = url.split("/").filter(Boolean).pop() || "";
+        return decodeURIComponent(slug.replace(/-/g, " ").replace(/\.\w+$/, ""));
+    } catch {
+        return url;
+    }
+}
+
+function extractJson(text) {
+    if (!text) return null;
+    const cleaned = text.replace(/```json|```/gi, "").trim();
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+        return JSON.parse(match[0]);
+    } catch {
+        return null;
+    }
+}
+
+// ============================================
+// STEP 1: SCRAPE - Find blog URLs from sitemap & blog pages (NO AI)
+// ============================================
+async function scrapeBlogUrls(domain, limit) {
     const urls = new Set();
 
-    // Try sitemap.xml first
-    for (const sitemapPath of ['/sitemap.xml', '/post-sitemap.xml', '/blog-sitemap.xml', '/sitemap_index.xml']) {
+    // Try sitemaps first
+    const sitemapPaths = ["/sitemap.xml", "/post-sitemap.xml", "/blog-sitemap.xml", "/sitemap_index.xml"];
+    for (const sitemapPath of sitemapPaths) {
         try {
             const { data } = await axios.get(`https://${domain}${sitemapPath}`, { timeout: 8000 });
-            // Extract URLs from XML (simple regex — no XML parser needed)
             const matches = data.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
             for (const m of matches) {
-                const url = m.replace(/<\/?loc>/gi, '');
-                // Filter for blog-like URLs
-                if (/\/(blog|post|article|news|insight|resource|update|story|case-stud)/i.test(url) && !url.endsWith('/blog') && !url.endsWith('/blog/')) {
+                const url = m.replace(/<\/?loc>/gi, "");
+                if (/\/(blog|post|article|news|insight|resource|update|story|case-stud)/i.test(url) &&
+                    !url.endsWith("/blog") && !url.endsWith("/blog/") &&
+                    !url.includes("?page=") && !url.includes("/category/") && !url.includes("/tag/")) {
                     urls.add(url);
                 }
             }
             if (urls.size > 0) {
-                console.log(`[Blog] Found ${urls.size} blog URLs from ${sitemapPath}`);
+                console.log(`[Blog] Found ${urls.size} URLs from ${sitemapPath}`);
                 break;
             }
-        } catch { /* sitemap not found, try next */ }
+        } catch {
+            // sitemap not found
+        }
     }
 
-    // If sitemap had nothing, try fetching the /blog page and extracting links
+    // If sitemap failed, try scraping blog listing pages
     if (urls.size === 0) {
-        for (const blogPath of ['/blog', '/resources', '/insights', '/news', '/articles']) {
+        const blogPaths = ["/blog", "/resources", "/insights", "/news", "/articles"];
+        for (const blogPath of blogPaths) {
             try {
                 const { data } = await axios.get(`https://${domain}${blogPath}`, { timeout: 8000 });
-                // Extract href links that look like blog posts
+                // Find links that look like blog posts
                 const linkMatches = data.match(/href="(\/[^"]*(?:blog|post|article|news|insight)[^"]*?)"/gi) || [];
                 for (const m of linkMatches) {
                     const href = m.match(/href="([^"]+)"/)?.[1];
-                    if (href && href !== blogPath && href !== `${blogPath}/` && href.split('/').length > 2) {
-                        const fullUrl = href.startsWith('http') ? href : `https://${domain}${href}`;
+                    if (href && href !== blogPath && href !== `${blogPath}/` && href.split("/").length > 2) {
+                        const fullUrl = href.startsWith("http") ? href : `https://${domain}${href}`;
                         urls.add(fullUrl);
                     }
                 }
                 if (urls.size > 0) {
-                    console.log(`[Blog] Found ${urls.size} blog URLs from ${blogPath} page`);
+                    console.log(`[Blog] Found ${urls.size} URLs from ${blogPath} page`);
                     break;
                 }
-            } catch { /* page not found, try next */ }
+            } catch {
+                // page not found
+            }
         }
     }
 
@@ -53,7 +82,7 @@ async function scrapeRealBlogUrls(domain, limit) {
 }
 
 // ============================================
-// STEP 1.5: Verify URLs are real (HTTP HEAD check)
+// STEP 2: VERIFY - HTTP HEAD check to confirm URLs are live
 // ============================================
 async function verifyUrls(urls) {
     const verified = [];
@@ -64,7 +93,7 @@ async function verifyUrls(urls) {
                 verified.push(url);
             }
         } catch {
-            // URL doesn't resolve — skip it
+            // URL doesn't resolve
         }
     });
     await Promise.all(checks);
@@ -73,109 +102,121 @@ async function verifyUrls(urls) {
 }
 
 // ============================================
-// STEP 2: Use AI to enrich scraped URLs with titles/descriptions
+// STEP 3: ENRICH - Extract metadata with OpenAI (fallback to slug titles)
 // ============================================
-async function enrichWithAI(domain, urls) {
-    const geminiKey = process.env.GOOGLE_API_KEY;
-    if (!geminiKey || urls.length === 0) {
-        // Return basic posts without AI enrichment
+async function enrichWithOpenAI(urls) {
+    const openaiKey = process.env.OPENAI_API_KEY;
+
+    // If no OpenAI key, return basic metadata from URL slugs
+    if (!openaiKey || urls.length === 0) {
+        console.log("[Blog] No OpenAI key or no URLs, using slug-based titles");
         return urls.map((url, i) => ({
             id: i + 1,
-            title: decodeURIComponent(url.split('/').pop().replace(/-/g, ' ').replace(/\.\w+$/, '')),
-            date: null,
-            image: `https://picsum.photos/seed/${i + 1}/800/400`,
-            description: '',
-            body: '',
             url,
+            title: safeDecodeSlug(url),
+            date: null,
+            description: "",
+            body: "",
+            image: `https://picsum.photos/seed/blog-${i + 1}/800/400`,
         }));
     }
 
     try {
-        const ai = new GoogleGenAI({ apiKey: geminiKey });
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: `I have these REAL blog post URLs from ${domain}. Visit each URL and extract the title, date, and a brief description.
+        console.log(`[Blog] Enriching ${urls.length} URLs with OpenAI...`);
 
-URLs:
-${urls.map((u, i) => `${i + 1}. ${u}`).join('\n')}
-
-Return ONLY valid JSON:
-{
-    "blogPosts": [
-        {
-            "id": 1,
-            "title": "The actual title from the page",
-            "date": "2024-01-15 or null if not found",
-            "description": "Brief summary of the post",
-            "body": "First paragraph of the post",
-            "url": "the original URL exactly as provided"
-        }
-    ]
-}
-
-RULES:
-- Use the EXACT URLs I provided. Do NOT change or invent new URLs.
-- Extract real titles from the pages. If you cannot read a page, use the URL slug as title.
-- RESPOND ONLY WITH JSON.`,
-            config: {
-                tools: [{ urlContext: {} }],
+        const response = await axios.post(
+            "https://api.openai.com/v1/chat/completions",
+            {
+                model: "gpt-4o-mini",
+                messages: [
+                    {
+                        role: "system",
+                        content: "You extract metadata from blog URLs. For each URL, infer the title from the slug, estimate a plausible date, and write a brief description. Respond ONLY with valid JSON."
+                    },
+                    {
+                        role: "user",
+                        content: `Extract metadata for these blog post URLs:\n\n${urls.map((u, i) => `${i + 1}. ${u}`).join("\n")}\n\nRespond with JSON:\n{"blogPosts": [{"url": "...", "title": "...", "date": "YYYY-MM-DD or null", "description": "2-3 sentence summary based on the slug/URL"}]}`
+                    }
+                ],
+                temperature: 0.3,
+                max_tokens: 2000
             },
-        });
+            {
+                headers: {
+                    "Authorization": `Bearer ${openaiKey}`,
+                    "Content-Type": "application/json"
+                },
+                timeout: 30000
+            }
+        );
 
-        const cleaned = response.text.replace(/```json|```/g, "").trim();
-        const match = cleaned.match(/\{[\s\S]*\}/);
-        if (match) {
-            const parsed = JSON.parse(match[0]);
-            // Add images and ensure URLs match
-            return (parsed.blogPosts || []).map((post, i) => ({
-                ...post,
+        const content = response.data.choices?.[0]?.message?.content || "";
+        const parsed = extractJson(content);
+
+        if (!parsed || !Array.isArray(parsed.blogPosts)) {
+            console.log("[Blog] OpenAI response not parseable, using slug titles");
+            return urls.map((url, i) => ({
                 id: i + 1,
-                image: `https://picsum.photos/seed/${i + 1}/800/400`,
-                url: post.url || urls[i],
+                url,
+                title: safeDecodeSlug(url),
+                date: null,
+                description: "",
+                body: "",
+                image: `https://picsum.photos/seed/blog-${i + 1}/800/400`,
             }));
         }
-    } catch (error) {
-        console.error("[Blog] AI enrichment failed:", error.message);
-    }
 
-    // Fallback: return posts with URL-derived titles
-    return urls.map((url, i) => ({
-        id: i + 1,
-        title: decodeURIComponent(url.split('/').pop().replace(/-/g, ' ').replace(/\.\w+$/, '')),
-        date: null,
-        image: `https://picsum.photos/seed/${i + 1}/800/400`,
-        description: '',
-        body: '',
-        url,
-    }));
+        console.log(`[Blog] OpenAI enriched ${parsed.blogPosts.length} posts`);
+
+        return parsed.blogPosts.map((post, i) => ({
+            id: i + 1,
+            url: post.url || urls[i],
+            title: post.title?.trim() || safeDecodeSlug(urls[i]),
+            date: post.date || null,
+            description: post.description || "",
+            body: post.body || "",
+            image: `https://picsum.photos/seed/blog-${i + 1}/800/400`,
+        }));
+
+    } catch (error) {
+        console.error("[Blog] OpenAI enrichment failed:", error.message);
+        return urls.map((url, i) => ({
+            id: i + 1,
+            url,
+            title: safeDecodeSlug(url),
+            date: null,
+            description: "",
+            body: "",
+            image: `https://picsum.photos/seed/blog-${i + 1}/800/400`,
+        }));
+    }
 }
 
 // ============================================
-// MAIN: Scrape first, enrich second
+// MAIN: Scrape first → Verify → Enrich (NO Gemini dependency)
 // ============================================
 async function getBlogPosts(domain, limit = 20) {
-    console.log(`[Blog] Finding blog posts for: ${domain}`);
+    console.log(`[Blog] ═══ Finding blog posts for: ${domain} ═══`);
 
-    // Step 1: Get real URLs from sitemap/blog page
-    const scraped = await scrapeRealBlogUrls(domain, limit);
-    console.log(`[Blog] Scraped ${scraped.length} candidate URLs for ${domain}`);
+    // ── Step 1: Scrape URLs from sitemap/blog pages ──
+    const scraped = await scrapeBlogUrls(domain, limit);
+    console.log(`[Blog] Scraped ${scraped.length} candidate URLs`);
 
     if (scraped.length === 0) {
         console.log(`[Blog] No blog URLs found for ${domain}`);
         return [];
     }
 
-    // Step 1.5: Verify each URL actually loads (HTTP HEAD)
-    const realUrls = await verifyUrls(scraped);
-
-    if (realUrls.length === 0) {
-        console.log(`[Blog] None of the scraped URLs are live`);
+    // ── Step 2: Verify URLs are live ──
+    const liveUrls = await verifyUrls(scraped);
+    if (liveUrls.length === 0) {
+        console.log("[Blog] None of the scraped URLs are live");
         return [];
     }
 
-    // Step 2: Enrich with AI (titles, descriptions)
-    const posts = await enrichWithAI(domain, realUrls);
-    console.log(`[Blog] Returning ${posts.length} enriched blog posts`);
+    // ── Step 3: Enrich with OpenAI metadata ──
+    const posts = await enrichWithOpenAI(liveUrls);
+    console.log(`[Blog] Returning ${posts.length} blog posts`);
     return posts;
 }
 
