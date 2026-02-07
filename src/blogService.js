@@ -1,9 +1,9 @@
+const OpenAI = require("openai");
 const axios = require("axios");
 
 // ============================================
 // AI-POWERED BLOG DISCOVERY
-// Uses OpenAI and Gemini with web search to find REAL blog posts
-// because every company structures their blogs differently
+// Uses OpenAI SDK with web_search tool (same pattern as aiService.js)
 // ============================================
 
 function safeDecodeSlug(url) {
@@ -27,63 +27,40 @@ function extractJson(text) {
     }
 }
 
-function extractUrls(text) {
-    if (!text) return [];
-    // Match URLs in the response
-    const urlRegex = /https?:\/\/[^\s\"\'\)\]\}]+/gi;
-    const matches = text.match(urlRegex) || [];
-    // Clean and dedupe
-    const cleaned = [...new Set(matches.map(u => u.replace(/[.,;:!?\)\]\}]+$/, '')))];
-    return cleaned;
-}
-
 // ============================================
-// STRATEGY 1: OpenAI with Web Search
+// STRATEGY 1: OpenAI with Web Search (using SDK)
 // ============================================
 async function findBlogsWithOpenAI(domain, limit) {
-    const openaiKey = process.env.OPENAI_API_KEY;
-    if (!openaiKey) {
-        console.log("[Blog] No OpenAI key, skipping OpenAI search");
+    if (!process.env.OPENAI_API_KEY) {
+        console.log("[Blog] No OPENAI_API_KEY, skipping OpenAI");
         return [];
     }
 
     try {
-        console.log(`[Blog] Searching blogs with OpenAI web search for ${domain}...`);
+        console.log(`[Blog] Using OpenAI web search to find blogs for ${domain}...`);
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-        const response = await axios.post(
-            "https://api.openai.com/v1/responses",
-            {
-                model: "gpt-4o",
-                tools: [{ type: "web_search_preview" }],
-                input: `Find ${limit} REAL blog posts or articles published on the website ${domain}. 
-                
-Search the web for: site:${domain} blog OR article OR post OR news OR insights
+        const response = await openai.responses.create({
+            model: "gpt-4o",
+            tools: [{ type: "web_search" }],
+            input: `Find ${limit} REAL blog posts or articles published on the website ${domain}.
 
-Return ONLY URLs that:
-1. Are actual blog/article pages on ${domain} (not category pages, not the main blog listing)
-2. Actually exist and are accessible right now
-3. Have real content (not 404 pages)
+Use web search to find: site:${domain} blog OR article OR post
 
-Respond with a JSON object:
+Return ONLY actual URLs you find in the search results. Do NOT invent or fabricate any URLs.
+
+Respond with JSON:
 {
     "blogPosts": [
-        {"url": "full URL", "title": "article title", "description": "brief description"}
+        {"url": "actual URL from search", "title": "article title", "description": "brief summary"}
     ]
 }
 
-Do NOT invent URLs. Only return URLs you found in the search results.`
-            },
-            {
-                headers: {
-                    "Authorization": `Bearer ${openaiKey}`,
-                    "Content-Type": "application/json"
-                },
-                timeout: 45000
-            }
-        );
+If no blog posts found, return: {"blogPosts": []}`
+        });
 
-        const content = response.data.output?.[0]?.content?.[0]?.text ||
-            response.data.choices?.[0]?.message?.content || "";
+        const content = response.output_text || "";
+        console.log(`[Blog] OpenAI response: ${content.substring(0, 200)}...`);
 
         const parsed = extractJson(content);
         if (parsed?.blogPosts?.length > 0) {
@@ -98,142 +75,79 @@ Do NOT invent URLs. Only return URLs you found in the search results.`
             }));
         }
 
-        // Fallback: extract URLs directly from response
-        const urls = extractUrls(content).filter(u => u.includes(domain));
-        if (urls.length > 0) {
-            console.log(`[Blog] OpenAI found ${urls.length} URLs (extracted from text)`);
-            return urls.slice(0, limit).map((url, i) => ({
-                id: i + 1,
-                url,
-                title: safeDecodeSlug(url),
-                date: null,
-                description: "",
-                image: `https://picsum.photos/seed/blog-${i + 1}/800/400`
-            }));
-        }
-
+        console.log("[Blog] OpenAI found no blogs");
         return [];
     } catch (error) {
-        console.log(`[Blog] OpenAI search failed: ${error.message}`);
+        console.log(`[Blog] OpenAI failed: ${error.message}`);
         return [];
     }
 }
 
 // ============================================
-// STRATEGY 2: Gemini with Google Search
+// STRATEGY 2: Sitemap/Blog Page Scraping (Fallback)
 // ============================================
-async function findBlogsWithGemini(domain, limit) {
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (!geminiKey) {
-        console.log("[Blog] No Gemini key, skipping Gemini search");
-        return [];
-    }
+async function findBlogsFromScraping(domain, limit) {
+    const urls = new Set();
+    console.log(`[Blog] Fallback: Scraping ${domain} for blog URLs...`);
 
-    try {
-        console.log(`[Blog] Searching blogs with Gemini + Google Search for ${domain}...`);
-
-        const response = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-            {
-                contents: [{
-                    parts: [{
-                        text: `Find ${limit} REAL blog posts or articles published on ${domain}.
-
-Search for: site:${domain} blog OR article OR insights OR resources
-
-I need actual, existing URLs - not invented ones. Return a JSON object with the real blog post URLs you find:
-
-{
-    "blogPosts": [
-        {"url": "actual URL from ${domain}", "title": "article title", "description": "what it's about"}
-    ]
-}
-
-Only include URLs that definitely exist on ${domain}. Do not make up URLs.`
-                    }]
-                }],
-                tools: [{
-                    googleSearch: {}
-                }],
-                generationConfig: {
-                    temperature: 0.1,
-                    maxOutputTokens: 2000
-                }
-            },
-            { timeout: 45000 }
-        );
-
-        const content = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-        const parsed = extractJson(content);
-        if (parsed?.blogPosts?.length > 0) {
-            console.log(`[Blog] Gemini found ${parsed.blogPosts.length} blog posts`);
-            return parsed.blogPosts.map((p, i) => ({
-                id: i + 1,
-                url: p.url,
-                title: p.title || safeDecodeSlug(p.url),
-                date: p.date || null,
-                description: p.description || "",
-                image: `https://picsum.photos/seed/blog-${i + 1}/800/400`
-            }));
-        }
-
-        // Fallback: extract URLs
-        const urls = extractUrls(content).filter(u => u.includes(domain));
-        if (urls.length > 0) {
-            console.log(`[Blog] Gemini found ${urls.length} URLs (extracted)`);
-            return urls.slice(0, limit).map((url, i) => ({
-                id: i + 1,
-                url,
-                title: safeDecodeSlug(url),
-                date: null,
-                description: "",
-                image: `https://picsum.photos/seed/blog-${i + 1}/800/400`
-            }));
-        }
-
-        return [];
-    } catch (error) {
-        console.log(`[Blog] Gemini search failed: ${error.message}`);
-        return [];
-    }
-}
-
-// ============================================
-// STRATEGY 3: Sitemap Fallback (quick check)
-// ============================================
-async function findBlogsFromSitemap(domain, limit) {
-    const urls = [];
+    // Try sitemaps
     const sitemapPaths = ["/sitemap.xml", "/post-sitemap.xml", "/blog-sitemap.xml"];
-
     for (const path of sitemapPaths) {
         try {
-            const { data } = await axios.get(`https://${domain}${path}`, { timeout: 5000 });
-            const matches = data.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
+            const { data } = await axios.get(`https://${domain}${path}`, {
+                timeout: 8000,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BTABot/1.0)' }
+            });
 
+            const matches = data.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
             for (const m of matches) {
                 const url = m.replace(/<\/?loc>/gi, "");
-                // Only get URLs with blog-like patterns OR articles in path
-                if ((url.includes('/blog/') || url.includes('/post/') ||
-                    url.includes('/article') || url.includes('/insights/') ||
-                    url.includes('/resources/') || url.includes('/news/')) &&
-                    !url.endsWith("/blog") && !url.endsWith("/blog/") &&
-                    !url.includes("/category/") && !url.includes("/tag/") &&
-                    !url.includes("?page=")) {
-                    urls.push(url);
+                const pathname = new URL(url).pathname;
+                // Keep URLs with slugs (paths > 1 segment or long single segment)
+                if (pathname.split("/").filter(Boolean).length >= 1 &&
+                    (pathname.includes("-") || pathname.length > 20)) {
+                    urls.add(url);
                 }
             }
 
-            if (urls.length > 0) {
-                console.log(`[Blog] Sitemap found ${urls.length} blog URLs`);
+            if (urls.size > 0) {
+                console.log(`[Blog] Sitemap found ${urls.size} URLs`);
                 break;
             }
-        } catch {
-            // sitemap not found
+        } catch { }
+    }
+
+    // Try blog pages if sitemap failed
+    if (urls.size === 0) {
+        const blogPaths = ["/blog", "/resources", "/insights", "/news"];
+        for (const path of blogPaths) {
+            try {
+                const { data } = await axios.get(`https://${domain}${path}`, {
+                    timeout: 8000,
+                    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BTABot/1.0)' }
+                });
+
+                const hrefMatches = data.match(/href="([^"]+)"/gi) || [];
+                for (const m of hrefMatches) {
+                    const href = m.replace(/href="|"/gi, "");
+                    let fullUrl = href.startsWith("http") ? href :
+                        href.startsWith("/") ? `https://${domain}${href}` : null;
+
+                    if (fullUrl && fullUrl.includes(domain) &&
+                        new URL(fullUrl).pathname.split("/").filter(Boolean).length >= 2) {
+                        urls.add(fullUrl);
+                    }
+                }
+
+                if (urls.size > 0) {
+                    console.log(`[Blog] Found ${urls.size} URLs from ${path}`);
+                    break;
+                }
+            } catch { }
         }
     }
 
-    return urls.slice(0, limit).map((url, i) => ({
+    return [...urls].slice(0, limit).map((url, i) => ({
         id: i + 1,
         url,
         title: safeDecodeSlug(url),
@@ -244,7 +158,7 @@ async function findBlogsFromSitemap(domain, limit) {
 }
 
 // ============================================
-// VERIFY URLs are actually accessible
+// VERIFY URLs are accessible (HEAD check)
 // ============================================
 async function verifyUrls(posts) {
     if (posts.length === 0) return [];
@@ -254,10 +168,10 @@ async function verifyUrls(posts) {
 
     for (const post of posts) {
         try {
-            const res = await axios.head(post.url, {
+            await axios.head(post.url, {
                 timeout: 5000,
                 maxRedirects: 3,
-                validateStatus: (status) => status >= 200 && status < 400
+                validateStatus: (s) => s >= 200 && s < 400
             });
             verified.push(post);
         } catch {
@@ -265,32 +179,27 @@ async function verifyUrls(posts) {
         }
     }
 
-    console.log(`[Blog] Verified ${verified.length}/${posts.length} URLs are accessible`);
+    console.log(`[Blog] Verified ${verified.length}/${posts.length} URLs`);
     return verified;
 }
 
 // ============================================
-// MAIN: Try AI search first, then sitemap fallback
+// MAIN: AI first, then scraping fallback
 // ============================================
 async function getBlogPosts(domain, limit = 20) {
     console.log(`[Blog] ═══ Finding blog posts for: ${domain} ═══`);
 
     let posts = [];
 
-    // Try OpenAI first (has web search)
+    // Try OpenAI with web search first
     posts = await findBlogsWithOpenAI(domain, limit);
 
-    // If OpenAI failed, try Gemini
+    // Fallback to scraping if AI failed
     if (posts.length === 0) {
-        posts = await findBlogsWithGemini(domain, limit);
+        posts = await findBlogsFromScraping(domain, limit);
     }
 
-    // If AI failed, try sitemap
-    if (posts.length === 0) {
-        posts = await findBlogsFromSitemap(domain, limit);
-    }
-
-    // Verify URLs are accessible
+    // Verify URLs exist
     if (posts.length > 0) {
         posts = await verifyUrls(posts);
     }
@@ -300,7 +209,7 @@ async function getBlogPosts(domain, limit = 20) {
         return [];
     }
 
-    console.log(`[Blog] Returning ${posts.length} verified blog posts`);
+    console.log(`[Blog] Returning ${posts.length} blog posts`);
     return posts;
 }
 
