@@ -82,22 +82,77 @@ async function scrapeBlogUrls(domain, limit) {
 }
 
 // ============================================
-// STEP 2: VERIFY - HTTP HEAD check to confirm URLs are live
+// STEP 2: VERIFY - GET request with content validation
 // ============================================
 async function verifyUrls(urls) {
     const verified = [];
-    const checks = urls.map(async (url) => {
-        try {
-            const res = await axios.head(url, { timeout: 5000, maxRedirects: 3 });
-            if (res.status >= 200 && res.status < 400) {
+
+    // Process in smaller batches to avoid overwhelming servers
+    const batchSize = 5;
+    for (let i = 0; i < urls.length; i += batchSize) {
+        const batch = urls.slice(i, i + batchSize);
+        const checks = batch.map(async (url) => {
+            try {
+                const res = await axios.get(url, {
+                    timeout: 8000,
+                    maxRedirects: 3,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    },
+                    // Only get first 50KB to check content
+                    maxContentLength: 50000,
+                    validateStatus: (status) => status >= 200 && status < 400
+                });
+
+                const html = res.data || "";
+                const finalUrl = res.request?.res?.responseUrl || url;
+
+                // Check if redirected to homepage (bad sign)
+                const urlPath = new URL(url).pathname;
+                const finalPath = new URL(finalUrl).pathname;
+                if (urlPath !== finalPath && (finalPath === "/" || finalPath === "")) {
+                    console.log(`[Blog] Skipped (redirect to homepage): ${url}`);
+                    return;
+                }
+
+                // Check for 404/error indicators in content
+                const lowerHtml = html.toLowerCase();
+                const is404Page =
+                    lowerHtml.includes("page not found") ||
+                    lowerHtml.includes("404") ||
+                    lowerHtml.includes("no longer available") ||
+                    lowerHtml.includes("this page doesn't exist") ||
+                    lowerHtml.includes("we couldn't find");
+
+                if (is404Page) {
+                    console.log(`[Blog] Skipped (soft 404): ${url}`);
+                    return;
+                }
+
+                // Check for minimum content (actual article should have some text)
+                const hasContent = html.length > 2000 && (
+                    lowerHtml.includes("<article") ||
+                    lowerHtml.includes("class=\"post") ||
+                    lowerHtml.includes("class=\"blog") ||
+                    lowerHtml.includes("class=\"content") ||
+                    lowerHtml.includes("<p>")
+                );
+
+                if (!hasContent) {
+                    console.log(`[Blog] Skipped (no content): ${url}`);
+                    return;
+                }
+
                 verified.push(url);
+            } catch (err) {
+                // URL doesn't resolve or error
+                console.log(`[Blog] Skipped (error): ${url} - ${err.message}`);
             }
-        } catch {
-            // URL doesn't resolve
-        }
-    });
-    await Promise.all(checks);
-    console.log(`[Blog] Verified ${verified.length}/${urls.length} URLs are live`);
+        });
+        await Promise.all(checks);
+    }
+
+    console.log(`[Blog] Verified ${verified.length}/${urls.length} URLs are live with content`);
     return verified;
 }
 
@@ -131,11 +186,11 @@ async function enrichWithOpenAI(urls) {
                 messages: [
                     {
                         role: "system",
-                        content: "You extract metadata from blog URLs. For each URL, infer the title from the slug, estimate a plausible date, and write a brief description. Respond ONLY with valid JSON."
+                        content: "You extract metadata from blog URLs. For each URL, create a readable title from the slug. Do NOT invent or fabricate dates, statistics, or numbers - only use what is literally in the URL. If no date is visible in the URL, set date to null. Write a brief description based ONLY on what the slug suggests. Respond ONLY with valid JSON."
                     },
                     {
                         role: "user",
-                        content: `Extract metadata for these blog post URLs:\n\n${urls.map((u, i) => `${i + 1}. ${u}`).join("\n")}\n\nRespond with JSON:\n{"blogPosts": [{"url": "...", "title": "...", "date": "YYYY-MM-DD or null", "description": "2-3 sentence summary based on the slug/URL"}]}`
+                        content: `Extract metadata for these blog post URLs:\n\n${urls.map((u, i) => `${i + 1}. ${u}`).join("\n")}\n\nRespond with JSON:\n{"blogPosts": [{"url": "...", "title": "...", "date": "YYYY-MM-DD if visible in URL, otherwise null", "description": "1-2 sentence summary based ONLY on the slug - do NOT invent numbers or statistics"}]}`
                     }
                 ],
                 temperature: 0.3,

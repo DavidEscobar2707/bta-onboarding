@@ -22,7 +22,7 @@ async function submitToAirtable(data) {
     // Extract client info
     const clientData = data.clientData || {};
     const clientScraped = clientData.data || {};
-    
+
     // ============================================
     // CLIENT SCRAPED DATA (everything from AI analysis)
     // ============================================
@@ -65,7 +65,7 @@ async function submitToAirtable(data) {
             domain: comp.domain,
             name: comp.name || compScrapedData.name || '',
             reason: comp.reason || '',
-            
+
             // Full scraped data from competitor
             usp: compScrapedData.usp || '',
             icp: compScrapedData.icp || '',
@@ -105,43 +105,65 @@ async function submitToAirtable(data) {
     // ============================================
     const sitemapInfo = data.sitemapData || {};
 
+    // ============================================
+    // ELEVENLABS DATA
+    // ============================================
+    const elevenLabsInfo = data.elevenLabsData || {};
+    const transcriptText = (elevenLabsInfo.transcript || [])
+        .map(msg => `[${msg.role}]: ${msg.text}`)
+        .join('\n');
+
+    // Helper: Convert array to pipe-delimited string (easier for Airtable AI)
+    const toReadableList = (arr) => {
+        if (!arr || !Array.isArray(arr)) return '';
+        return arr.filter(Boolean).join(' | ');
+    };
+
     // Build the record fields
     const fields = {
         // === CLIENT IDENTIFICATION ===
         'Client Domain': clientInfo.domain,
         'Client Name': clientInfo.name,
-        
+
         // === CLIENT SCRAPED DATA (Individual fields for easy viewing) ===
         'Client USP': clientInfo.usp,
         'Client ICP': clientInfo.icp,
         'Client Industry': clientInfo.industry,
         'Client About': clientInfo.about,
         'Client Tone': clientInfo.tone,
-        'Client Features': JSON.stringify(clientInfo.features),
-        'Client Integrations': JSON.stringify(clientInfo.integrations),
-        'Client Pricing': JSON.stringify(clientInfo.pricing),
-        'Client Tech Stack': JSON.stringify(clientInfo.techStack),
-        'Client Compliance': JSON.stringify(clientInfo.compliance),
-        'Client Reviews': JSON.stringify(clientInfo.reviews),
-        
+        'Client Features': toReadableList(clientInfo.features),  // Pipe-delimited
+        'Client Integrations': toReadableList(clientInfo.integrations),  // Pipe-delimited
+        'Client Tech Stack': toReadableList(clientInfo.techStack),  // Pipe-delimited
+        'Client Compliance': toReadableList(clientInfo.compliance),  // Pipe-delimited
+        'Client Pricing': JSON.stringify(clientInfo.pricing),  // Complex, keep JSON
+        'Client Reviews': JSON.stringify(clientInfo.reviews),  // Complex, keep JSON
+
         // === FULL CLIENT DATA (JSON backup of everything) ===
         'Client Full Data': JSON.stringify(clientInfo),
-        
+
         // === COMPETITORS (Full detailed JSON) ===
         'Competitors Count': competitorsDetailed.length,
+        'Competitors Names': competitorsDetailed.map(c => c.name).join(' | '),  // Quick reference
         'Competitors Data': JSON.stringify(competitorsDetailed),
-        
+
         // === SELECTED BLOGS FOR STYLE ===
         'Selected Blogs Count': selectedBlogs.length,
+        'Selected Blogs Titles': selectedBlogs.map(b => b.title).join(' | '),  // Quick reference
         'Selected Blogs': JSON.stringify(selectedBlogs),
-        
+
         // === CUSTOM URLS ===
-        'Custom URLs': JSON.stringify((data.customUrls || []).filter(u => u && u.trim() !== '')),
-        
+        'Custom URLs': toReadableList((data.customUrls || []).filter(u => u && u.trim() !== '')),
+
+        // === ELEVENLABS CALL DATA ===
+        'ElevenLabs Completed': elevenLabsInfo.completed ? 'Yes' : 'No',
+        'ElevenLabs Duration Seconds': elevenLabsInfo.duration || 0,
+        'ElevenLabs Messages Count': (elevenLabsInfo.transcript || []).length,
+        'ElevenLabs Transcript': transcriptText,
+
         // === LLMs.txt (the only thing we need from sitemap) ===
         'Has LLMs TXT': sitemapInfo.llmsTxt ? 'Yes' : 'No',
         'LLMs TXT Content': sitemapInfo.llmsTxt || '',
-        
+
         // === METADATA ===
         'Submitted At': new Date().toISOString().split('T')[0]
     };
@@ -172,7 +194,7 @@ async function submitToAirtable(data) {
         };
     } catch (error) {
         console.error('[Airtable] Error creating record:', error.response?.data || error.message);
-        
+
         // Provide helpful error messages
         if (error.response?.status === 401) {
             throw new Error('Airtable authentication failed. Check your API key.');
@@ -184,7 +206,7 @@ async function submitToAirtable(data) {
             const fieldError = error.response.data?.error?.message || 'Unknown field error';
             throw new Error(`Airtable field error: ${fieldError}`);
         }
-        
+
         throw new Error(`Airtable error: ${error.message}`);
     }
 }
