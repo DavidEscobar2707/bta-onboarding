@@ -7,12 +7,85 @@ const cheerio = require("cheerio");
 // Finds top 10 most popular/recent blogs and scrapes full content
 // ============================================
 
+// URLs to exclude - not actual blog posts
+const EXCLUDED_PATTERNS = [
+    /sitemap/i,
+    /\.xml$/i,
+    /\.json$/i,
+    /\.pdf$/i,
+    /\/tag\//i,
+    /\/category\//i,
+    /\/author\//i,
+    /\/page\/\d+/i,
+    /\/feed\//i,
+    /\/rss/i,
+    /\/wp-content\//i,
+    /\/wp-admin\//i,
+    /\/wp-includes\//i,
+    /\/cdn-cgi\//i,
+    /\/assets\//i,
+    /\/static\//i,
+    /\/#/,
+    /\/search/i,
+    /\/login/i,
+    /\/signup/i,
+    /\/register/i,
+    /\/cart/i,
+    /\/checkout/i,
+    /\/account/i,
+    /\/privacy/i,
+    /\/terms/i,
+    /\/contact$/i,
+    /\/about$/i,
+    /\/pricing$/i,
+    /\/features$/i,
+    /\/demo$/i
+];
+
+function isValidBlogUrl(url) {
+    // Must have a path with at least one slug segment
+    try {
+        const parsed = new URL(url);
+        const pathname = parsed.pathname;
+
+        // Check against excluded patterns
+        for (const pattern of EXCLUDED_PATTERNS) {
+            if (pattern.test(url)) {
+                return false;
+            }
+        }
+
+        // Must have a path deeper than just /blog/
+        const segments = pathname.split('/').filter(Boolean);
+        if (segments.length < 2) return false;
+
+        // Should have a slug-like pattern (words with dashes)
+        const lastSegment = segments[segments.length - 1];
+        if (lastSegment.includes('-') || lastSegment.length > 15) {
+            return true;
+        }
+
+        return false;
+    } catch {
+        return false;
+    }
+}
+
 function safeDecodeSlug(url) {
     try {
         const slug = url.split("/").filter(Boolean).pop() || "";
-        return decodeURIComponent(slug.replace(/-/g, " ").replace(/\.\w+$/, ""));
+        // Clean up the slug to make it a readable title
+        const decoded = decodeURIComponent(slug)
+            .replace(/-/g, " ")
+            .replace(/\.\w+$/, "")
+            .replace(/[_]/g, " ");
+
+        // Capitalize first letter of each word
+        return decoded.split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
     } catch {
-        return url;
+        return "Untitled Article";
     }
 }
 
@@ -44,7 +117,7 @@ async function scrapeFullBlogContent(url) {
         const $ = cheerio.load(data);
 
         // Remove unwanted elements
-        $('script, style, nav, header, footer, aside, .sidebar, .comments, .related-posts, .advertisement, .ad, .social-share').remove();
+        $('script, style, nav, header, footer, aside, .sidebar, .comments, .related-posts, .advertisement, .ad, .social-share, .cookie-banner, .popup, .modal').remove();
 
         // Try to find article content in common containers
         const contentSelectors = [
@@ -56,21 +129,37 @@ async function scrapeFullBlogContent(url) {
             '.blog-content',
             '.content-body',
             '.post-body',
-            'main',
-            '.main-content'
+            '.blog-post-content',
+            '.single-post-content',
+            '.article-body',
+            'main article',
+            'main .content',
+            'main'
         ];
 
         let content = '';
-        let title = $('h1').first().text().trim() || $('title').text().trim();
-        let description = $('meta[name="description"]').attr('content') || '';
+        let title = $('h1').first().text().trim() ||
+            $('meta[property="og:title"]').attr('content') ||
+            $('title').text().trim().split('|')[0].trim();
+        let description = $('meta[name="description"]').attr('content') ||
+            $('meta[property="og:description"]').attr('content') || '';
         let author = $('meta[name="author"]').attr('content') ||
             $('[rel="author"]').text().trim() ||
-            $('.author-name, .byline, .post-author').first().text().trim() || '';
+            $('.author-name, .byline, .post-author, .author').first().text().trim() || '';
         let publishDate = $('meta[property="article:published_time"]').attr('content') ||
             $('time').attr('datetime') ||
             $('[class*="date"], [class*="published"]').first().text().trim() || '';
         let image = $('meta[property="og:image"]').attr('content') ||
-            $('article img').first().attr('src') || '';
+            $('article img').first().attr('src') ||
+            $('.featured-image img, .post-thumbnail img').first().attr('src') || '';
+
+        // Make image URL absolute if relative
+        if (image && !image.startsWith('http')) {
+            try {
+                const baseUrl = new URL(url);
+                image = new URL(image, baseUrl.origin).href;
+            } catch { }
+        }
 
         // Try each selector to find content
         for (const selector of contentSelectors) {
@@ -81,15 +170,15 @@ async function scrapeFullBlogContent(url) {
                     .find('p, h2, h3, h4, li, blockquote')
                     .map((i, el) => $(el).text().trim())
                     .get()
-                    .filter(text => text.length > 20) // Filter out short fragments
+                    .filter(text => text.length > 30) // Filter out short fragments
                     .join('\n\n');
 
-                if (content.length > 200) break;
+                if (content.length > 300) break;
             }
         }
 
         // Fallback: get all paragraphs
-        if (content.length < 200) {
+        if (content.length < 300) {
             content = $('p')
                 .map((i, el) => $(el).text().trim())
                 .get()
@@ -109,6 +198,12 @@ async function scrapeFullBlogContent(url) {
         const readingTime = Math.ceil(wordCount / 200);
 
         console.log(`[Blog] Scraped ${content.length} chars, ${wordCount} words from ${url}`);
+
+        // Only return if we got meaningful content
+        if (content.length < 100 || wordCount < 20) {
+            console.log(`[Blog] Insufficient content from ${url}`);
+            return null;
+        }
 
         return {
             title: title.substring(0, 300),
@@ -144,37 +239,32 @@ async function findBlogsWithOpenAI(domain, limit = 10) {
         const response = await openai.responses.create({
             model: "gpt-4o",
             tools: [{ type: "web_search" }],
-            input: `Find the TOP ${limit} most popular or most recent blog posts/articles from ${domain}.
+            input: `Find ${limit} REAL blog posts or articles published on ${domain}.
 
-Use web search: site:${domain} blog OR article OR post
+Search for: site:${domain}/blog OR site:${domain}/resources OR site:${domain}/insights
 
-PRIORITY ORDER:
-1. Most shared/popular articles (high engagement, backlinks)
-2. Most recent articles (published in the last 6 months)
-3. Cornerstone content (comprehensive guides, pillar pages)
+IMPORTANT: 
+- Return ONLY actual article/blog post URLs (not category pages, tag pages, or sitemaps)
+- URLs should be individual articles with slugs like "/blog/article-name"
+- Do NOT include URLs ending in /blog/, /resources/, /category/, /tag/, /author/
 
-For each article, find:
-- The exact URL
-- The title
-- A brief description
-- Publication date if visible
-
-Return ONLY real URLs you found. Do NOT fabricate any URLs.
+For each REAL article found:
+- The exact full URL
+- The article title
+- A brief description of what the article is about
 
 Respond with JSON:
 {
     "blogPosts": [
         {
-            "url": "actual URL from search",
-            "title": "article title",
-            "description": "brief summary",
-            "date": "publication date or null",
-            "popularity": "high|medium|low based on your assessment"
+            "url": "https://${domain}/blog/example-article-title",
+            "title": "Example Article Title",
+            "description": "Brief description of the article content"
         }
     ]
 }
 
-If no posts found, return: {"blogPosts": []}`
+If no blog posts found, return: {"blogPosts": []}`
         });
 
         const content = response.output_text || "";
@@ -182,21 +272,11 @@ If no posts found, return: {"blogPosts": []}`
 
         const parsed = extractJson(content);
         if (parsed?.blogPosts?.length > 0) {
-            console.log(`[Blog] OpenAI found ${parsed.blogPosts.length} blog posts`);
+            // Filter valid URLs
+            const validPosts = parsed.blogPosts.filter(p => isValidBlogUrl(p.url));
+            console.log(`[Blog] OpenAI found ${validPosts.length} valid blog posts (filtered from ${parsed.blogPosts.length})`);
 
-            // Sort by popularity (high first) then by date (newest first)
-            const sorted = parsed.blogPosts.sort((a, b) => {
-                const popOrder = { high: 0, medium: 1, low: 2 };
-                const popDiff = (popOrder[a.popularity] || 2) - (popOrder[b.popularity] || 2);
-                if (popDiff !== 0) return popDiff;
-
-                // Try to sort by date
-                const dateA = new Date(a.date || 0);
-                const dateB = new Date(b.date || 0);
-                return dateB - dateA;
-            });
-
-            return sorted.slice(0, limit).map((p, i) => ({
+            return validPosts.slice(0, limit).map((p, i) => ({
                 id: i + 1,
                 url: p.url,
                 title: p.title || safeDecodeSlug(p.url),
@@ -216,67 +296,107 @@ If no posts found, return: {"blogPosts": []}`
 }
 
 // ============================================
-// STRATEGY 2: Sitemap/Blog Page Scraping (Fallback)
+// STRATEGY 2: Direct Blog Page Scraping (Fallback)
 // ============================================
 async function findBlogsFromScraping(domain, limit = 10) {
     const urls = new Set();
     console.log(`[Blog] Fallback: Scraping ${domain} for blog URLs...`);
 
-    // Try sitemaps
-    const sitemapPaths = ["/sitemap.xml", "/post-sitemap.xml", "/blog-sitemap.xml"];
-    for (const path of sitemapPaths) {
+    // Try blog listing pages directly (not sitemaps)
+    const blogPaths = ["/blog", "/resources", "/insights", "/news", "/articles", "/posts"];
+
+    for (const path of blogPaths) {
         try {
+            console.log(`[Blog] Trying ${domain}${path}...`);
             const { data } = await axios.get(`https://${domain}${path}`, {
-                timeout: 8000,
-                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BTABot/1.0)' }
+                timeout: 10000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
             });
 
-            const matches = data.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
-            for (const m of matches) {
-                const url = m.replace(/<\/?loc>/gi, "");
-                const pathname = new URL(url).pathname;
-                if (pathname.split("/").filter(Boolean).length >= 1 &&
-                    (pathname.includes("-") || pathname.length > 20)) {
-                    urls.add(url);
-                }
+            const $ = cheerio.load(data);
+
+            // Find article links - look for common patterns
+            const linkSelectors = [
+                'article a[href]',
+                '.post a[href]',
+                '.blog-post a[href]',
+                '.article-card a[href]',
+                '.entry-title a[href]',
+                'h2 a[href]',
+                'h3 a[href]',
+                '.card a[href]',
+                'a[href*="/blog/"]',
+                'a[href*="/post/"]',
+                'a[href*="/article/"]'
+            ];
+
+            for (const selector of linkSelectors) {
+                $(selector).each((i, el) => {
+                    let href = $(el).attr('href');
+                    if (!href) return;
+
+                    // Make URL absolute
+                    if (href.startsWith('/')) {
+                        href = `https://${domain}${href}`;
+                    } else if (!href.startsWith('http')) {
+                        return;
+                    }
+
+                    // Only include URLs from the same domain
+                    try {
+                        const parsed = new URL(href);
+                        if (!parsed.hostname.includes(domain.replace('www.', ''))) return;
+                    } catch {
+                        return;
+                    }
+
+                    // Validate it's a real blog URL
+                    if (isValidBlogUrl(href)) {
+                        urls.add(href);
+                    }
+                });
             }
 
-            if (urls.size > 0) {
-                console.log(`[Blog] Sitemap found ${urls.size} URLs`);
+            if (urls.size >= limit) {
+                console.log(`[Blog] Found ${urls.size} valid blog URLs from ${path}`);
                 break;
             }
-        } catch { }
+        } catch (error) {
+            console.log(`[Blog] Could not access ${domain}${path}: ${error.message}`);
+        }
     }
 
-    // Try blog pages if sitemap failed
+    // If still no URLs, try sitemap as last resort but filter carefully
     if (urls.size === 0) {
-        const blogPaths = ["/blog", "/resources", "/insights", "/news"];
-        for (const path of blogPaths) {
+        console.log("[Blog] Trying sitemaps as last resort...");
+        const sitemapPaths = ["/post-sitemap.xml", "/blog-sitemap.xml"];
+
+        for (const path of sitemapPaths) {
             try {
                 const { data } = await axios.get(`https://${domain}${path}`, {
                     timeout: 8000,
                     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BTABot/1.0)' }
                 });
 
-                const hrefMatches = data.match(/href="([^"]+)"/gi) || [];
-                for (const m of hrefMatches) {
-                    const href = m.replace(/href="|"/gi, "");
-                    let fullUrl = href.startsWith("http") ? href :
-                        href.startsWith("/") ? `https://${domain}${href}` : null;
-
-                    if (fullUrl && fullUrl.includes(domain) &&
-                        new URL(fullUrl).pathname.split("/").filter(Boolean).length >= 2) {
-                        urls.add(fullUrl);
+                const matches = data.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
+                for (const m of matches) {
+                    const url = m.replace(/<\/?loc>/gi, "");
+                    if (isValidBlogUrl(url)) {
+                        urls.add(url);
                     }
                 }
 
                 if (urls.size > 0) {
-                    console.log(`[Blog] Found ${urls.size} URLs from ${path}`);
+                    console.log(`[Blog] Sitemap found ${urls.size} valid URLs`);
                     break;
                 }
             } catch { }
         }
     }
+
+    console.log(`[Blog] Total valid blog URLs found: ${urls.size}`);
 
     return [...urls].slice(0, limit).map((url, i) => ({
         id: i + 1,
@@ -300,7 +420,7 @@ async function verifyUrls(posts) {
 
     for (const post of posts) {
         try {
-            await axios.head(post.url, {
+            const response = await axios.head(post.url, {
                 timeout: 5000,
                 maxRedirects: 3,
                 validateStatus: (s) => s >= 200 && s < 400
@@ -326,9 +446,18 @@ async function getBlogPosts(domain, limit = 10) {
     // Try OpenAI with web search first
     posts = await findBlogsWithOpenAI(domain, limit);
 
-    // Fallback to scraping if AI failed
-    if (posts.length === 0) {
-        posts = await findBlogsFromScraping(domain, limit);
+    // Fallback to scraping if AI failed or found too few
+    if (posts.length < 3) {
+        console.log("[Blog] OpenAI found too few, trying fallback scraping...");
+        const scrapedPosts = await findBlogsFromScraping(domain, limit);
+
+        // Merge, avoiding duplicates
+        const existingUrls = new Set(posts.map(p => p.url));
+        for (const post of scrapedPosts) {
+            if (!existingUrls.has(post.url)) {
+                posts.push(post);
+            }
+        }
     }
 
     // Verify URLs exist
@@ -343,10 +472,11 @@ async function getBlogPosts(domain, limit = 10) {
     if (posts.length > 0) {
         console.log(`[Blog] Scraping full content for ${posts.length} posts...`);
 
+        const postsWithContent = [];
         for (let i = 0; i < posts.length; i++) {
             const scraped = await scrapeFullBlogContent(posts[i].url);
-            if (scraped) {
-                posts[i] = {
+            if (scraped && scraped.content) {
+                postsWithContent.push({
                     ...posts[i],
                     title: scraped.title || posts[i].title,
                     description: scraped.description || posts[i].description,
@@ -354,13 +484,23 @@ async function getBlogPosts(domain, limit = 10) {
                     fullContent: scraped.fullContent,
                     author: scraped.author,
                     date: scraped.publishDate || posts[i].date,
-                    image: scraped.image || posts[i].image || `https://picsum.photos/seed/blog-${i + 1}/800/400`,
+                    image: scraped.image || `https://picsum.photos/seed/blog-${i + 1}/800/400`,
                     wordCount: scraped.wordCount,
                     readingTime: scraped.readingTime,
                     scrapedAt: scraped.scrapedAt
-                };
+                });
+            } else {
+                // Still include post but with placeholder content
+                postsWithContent.push({
+                    ...posts[i],
+                    image: `https://picsum.photos/seed/blog-${i + 1}/800/400`,
+                    content: "Content could not be scraped from this page.",
+                    wordCount: 0,
+                    readingTime: 0
+                });
             }
         }
+        posts = postsWithContent;
     }
 
     if (posts.length === 0) {
@@ -368,7 +508,7 @@ async function getBlogPosts(domain, limit = 10) {
         return [];
     }
 
-    console.log(`[Blog] ═══ Returning ${posts.length} blog posts with full content ═══`);
+    console.log(`[Blog] ═══ Returning ${posts.length} blog posts with content ═══`);
     return posts;
 }
 
