@@ -1,5 +1,6 @@
 const { GoogleGenAI } = require("@google/genai");
 const OpenAI = require("openai");
+const { tryClaudeOpus } = require("./anthropicService");
 
 function getPrompt(domain) {
     return `
@@ -59,6 +60,80 @@ function parseJson(text) {
     return JSON.parse(match[0]);
 }
 
+/**
+ * Merge results from multiple LLMs, taking the most complete data from each
+ */
+function mergeResearchResults(results) {
+    if (results.length === 0) return null;
+    if (results.length === 1) return results[0];
+
+    console.log(`[AI] Merging results from ${results.length} providers...`);
+
+    const merged = { ...results[0] };
+
+    for (let i = 1; i < results.length; i++) {
+        const result = results[i];
+
+        // For string fields, prefer non-null/non-empty values
+        const stringFields = ['name', 'usp', 'icp', 'tone', 'about', 'industry', 'niche', 'support', 'confidence'];
+        for (const field of stringFields) {
+            if (!merged[field] && result[field]) {
+                merged[field] = result[field];
+            } else if (result[field] && result[field].length > (merged[field]?.length || 0)) {
+                // Prefer longer/more detailed descriptions
+                merged[field] = result[field];
+            }
+        }
+
+        // For arrays, combine unique items
+        const arrayFields = ['features', 'integrations', 'compliance', 'techStack', 'limitations', 'blogTopics'];
+        for (const field of arrayFields) {
+            const existing = merged[field] || [];
+            const newItems = result[field] || [];
+            const combined = [...new Set([...existing, ...newItems])];
+            merged[field] = combined;
+        }
+
+        // For complex arrays (pricing, founders, reviews, caseStudies, competitors, contact)
+        // Combine and deduplicate by key field
+        const complexArrayFields = [
+            { field: 'pricing', key: 'tier' },
+            { field: 'founders', key: 'name' },
+            { field: 'reviews', key: 'platform' },
+            { field: 'caseStudies', key: 'company' },
+            { field: 'competitors', key: 'domain' },
+            { field: 'contact', key: 'label' }
+        ];
+
+        for (const { field, key } of complexArrayFields) {
+            const existing = merged[field] || [];
+            const newItems = result[field] || [];
+            const seen = new Set(existing.map(item => item[key]?.toLowerCase()));
+
+            for (const item of newItems) {
+                const itemKey = item[key]?.toLowerCase();
+                if (itemKey && !seen.has(itemKey)) {
+                    existing.push(item);
+                    seen.add(itemKey);
+                }
+            }
+            merged[field] = existing;
+        }
+
+        // Merge social object
+        if (result.social) {
+            merged.social = { ...(merged.social || {}), ...result.social };
+            // Remove nulls
+            for (const key of Object.keys(merged.social)) {
+                if (!merged.social[key]) delete merged.social[key];
+            }
+        }
+    }
+
+    console.log(`[AI] Merged result: ${merged.features?.length || 0} features, ${merged.competitors?.length || 0} competitors`);
+    return merged;
+}
+
 async function tryGemini(domain) {
     const apiKey = process.env.GOOGLE_API_KEY;
     if (!apiKey) {
@@ -111,23 +186,66 @@ async function tryOpenAI(domain) {
     return result;
 }
 
+/**
+ * Generate client data using ALL available AI providers
+ * Merges results from multiple sources for maximum data extraction
+ */
 async function generateClientData(domain) {
+    console.log(`[AI] ═══ Starting multi-LLM research for: ${domain} ═══`);
+
+    const results = [];
+    const errors = [];
+
+    // Try Gemini (fastest, has web search)
     try {
-        const result = await tryGemini(domain);
-        if (result) return result;
+        const geminiResult = await tryGemini(domain);
+        if (geminiResult) {
+            results.push(geminiResult);
+            console.log("[AI] ✓ Gemini contributed data");
+        }
     } catch (error) {
-        console.error("[AI] Gemini failed:", error.message);
+        console.error("[AI] ✗ Gemini failed:", error.message);
+        errors.push({ provider: 'Gemini', error: error.message });
     }
 
+    // Try OpenAI (good general knowledge)
     try {
-        const result = await tryOpenAI(domain);
-        if (result) return result;
+        const openaiResult = await tryOpenAI(domain);
+        if (openaiResult) {
+            results.push(openaiResult);
+            console.log("[AI] ✓ OpenAI contributed data");
+        }
     } catch (error) {
-        console.error("[AI] OpenAI failed:", error.message);
+        console.error("[AI] ✗ OpenAI failed:", error.message);
+        errors.push({ provider: 'OpenAI', error: error.message });
+    }
+
+    // Try Claude OPUS (deepest analysis)
+    try {
+        const claudeResult = await tryClaudeOpus(domain);
+        if (claudeResult) {
+            results.push(claudeResult);
+            console.log("[AI] ✓ Claude OPUS contributed data");
+        }
+    } catch (error) {
+        console.error("[AI] ✗ Claude OPUS failed:", error.message);
+        errors.push({ provider: 'Claude OPUS', error: error.message });
+    }
+
+    // Merge all results
+    if (results.length > 0) {
+        const merged = mergeResearchResults(results);
+        merged._meta = {
+            providers: results.length,
+            errors: errors.length,
+            timestamp: new Date().toISOString()
+        };
+        console.log(`[AI] ═══ Research complete: ${results.length} providers, ${errors.length} failures ═══`);
+        return merged;
     }
 
     console.error("[AI] All providers failed");
     return null;
 }
 
-module.exports = { generateClientData };
+module.exports = { generateClientData, mergeResearchResults };

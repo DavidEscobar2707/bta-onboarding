@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const { generateClientData } = require('./aiService');
 const { getBlogPosts } = require('./blogService');
 const { submitToAirtable, getClientsFromAirtable } = require('./airtableService');
+const { submitToNotion } = require('./notionService');
 require('dotenv').config();
 
 const app = express();
@@ -140,14 +141,38 @@ app.post('/api/submit', async (req, res) => {
     const { clientData, competitors, likedPosts, customUrls, compData } = req.body;
     if (!clientData) return res.status(400).json({ error: 'Client data is required' });
 
-    try {
-        console.log(`[BTA] Submitting to Airtable: ${clientData.domain}`);
-        const result = await submitToAirtable({ clientData, competitors, likedPosts, customUrls, compData });
-        res.json({ status: 'success', message: 'Submitted to Airtable', ...result });
-    } catch (error) {
-        console.error('[BTA] Submit error:', error.message);
-        res.status(500).json({ error: 'Failed to submit', details: error.message });
+    console.log(`[BTA] Submitting to Airtable + Notion: ${clientData.domain}`);
+
+    // Submit to both Airtable and Notion in parallel
+    const [airtableResult, notionResult] = await Promise.allSettled([
+        submitToAirtable({ clientData, competitors, likedPosts, customUrls, compData }),
+        submitToNotion({ clientData, competitors, likedPosts, customUrls, compData })
+    ]);
+
+    const response = {
+        status: 'success',
+        airtable: airtableResult.status === 'fulfilled'
+            ? airtableResult.value
+            : { error: airtableResult.reason?.message || 'Airtable failed' },
+        notion: notionResult.status === 'fulfilled'
+            ? notionResult.value
+            : { error: notionResult.reason?.message || 'Notion failed' }
+    };
+
+    // Log results
+    console.log(`[BTA] Airtable: ${airtableResult.status}`);
+    console.log(`[BTA] Notion: ${notionResult.status}`);
+
+    // Return success even if one failed (data is preserved in the other)
+    if (airtableResult.status === 'rejected' && notionResult.status === 'rejected') {
+        return res.status(500).json({
+            error: 'Both destinations failed',
+            airtable: response.airtable,
+            notion: response.notion
+        });
     }
+
+    res.json(response);
 });
 
 // ============================================
@@ -200,6 +225,57 @@ app.get('/api/elevenlabs/session', async (req, res) => {
         console.error('[ElevenLabs] Error:', error.message);
         res.status(500).json({ error: 'Failed to get signed URL', details: error.message });
     }
+});
+
+// ============================================
+// 9. ELEVENLABS CONTEXT: Provide full context for voice calls
+// ============================================
+app.get('/api/elevenlabs/context/:token', (req, res) => {
+    const data = formTokens.get(req.params.token);
+    if (!data) {
+        return res.status(404).json({ error: 'Form not found or expired' });
+    }
+
+    // Build comprehensive context for the voice agent
+    const clientData = data.clientData || {};
+    const competitors = data.competitors || [];
+
+    // Format competitor information for voice agent
+    const competitorSummaries = competitors.map(comp => {
+        return `${comp.name || comp.domain}: ${comp.reason || 'Direct competitor'}`;
+    }).join('. ');
+
+    // Build context object with dynamic variables for ElevenLabs
+    const context = {
+        // Basic client info
+        client_name: data.clientName || clientData.name || data.domain,
+        client_domain: data.domain,
+
+        // Company details from scraped data
+        client_usp: clientData.usp || 'Not available',
+        client_icp: clientData.icp || 'Not available',
+        client_industry: clientData.industry || 'Not available',
+        client_niche: clientData.niche || 'Not available',
+        client_about: clientData.about || 'Not available',
+
+        // Features and integrations
+        client_features: (clientData.features || []).join(', ') || 'Not available',
+        client_integrations: (clientData.integrations || []).join(', ') || 'Not available',
+
+        // Competitor information
+        competitor_count: competitors.length,
+        competitor_names: competitors.map(c => c.name || c.domain).join(', ') || 'None identified',
+        competitor_details: competitorSummaries || 'No competitor details available',
+
+        // Full data for advanced use
+        full_client_data: JSON.stringify(clientData),
+        full_competitor_data: JSON.stringify(competitors)
+    };
+
+    console.log(`[ElevenLabs] Context requested for ${context.client_name}`);
+    console.log(`[ElevenLabs] Providing ${Object.keys(context).length} dynamic variables`);
+
+    res.json(context);
 });
 
 // ============================================
