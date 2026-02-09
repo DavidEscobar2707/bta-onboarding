@@ -380,7 +380,9 @@ async function generateClientData(domain) {
         errors.push({ provider: 'Gemini', error: error.message });
     }
 
-    // Try OpenAI (good general knowledge)
+    // OpenAI DISABLED - quota exceeded, using Gemini + Claude only
+    // To re-enable, uncomment the block below after adding billing
+    /*
     try {
         const openaiResult = await tryOpenAI(domain);
         if (openaiResult) {
@@ -391,6 +393,7 @@ async function generateClientData(domain) {
         console.error("[AI] ✗ OpenAI failed:", error.message);
         errors.push({ provider: 'OpenAI', error: error.message });
     }
+    */
 
     // Try Claude OPUS (deepest analysis)
     try {
