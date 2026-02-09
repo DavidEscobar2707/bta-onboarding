@@ -269,8 +269,8 @@ function mergeResearchResults(results) {
         ];
 
         for (const { field, key } of complexArrayFields) {
-            const existing = merged[field] || [];
-            const newItems = result[field] || [];
+            const existing = Array.isArray(merged[field]) ? merged[field] : [];
+            const newItems = Array.isArray(result[field]) ? result[field] : [];
             const seen = new Set(existing.map(item => item[key]?.toLowerCase()));
 
             for (const item of newItems) {
