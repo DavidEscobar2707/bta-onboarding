@@ -251,15 +251,15 @@ app.get('/api/elevenlabs/context/:token', (req, res) => {
     if (clientData.niche) contextLines.push(`NICHE: ${clientData.niche}`);
     if (clientData.tone) contextLines.push(`BRAND TONE: ${clientData.tone}`);
 
-    if (clientData.features?.length > 0) {
+    if (Array.isArray(clientData.features) && clientData.features.length > 0) {
         contextLines.push(`FEATURES: ${clientData.features.join(', ')}`);
     }
-    if (clientData.integrations?.length > 0) {
+    if (Array.isArray(clientData.integrations) && clientData.integrations.length > 0) {
         contextLines.push(`INTEGRATIONS: ${clientData.integrations.join(', ')}`);
     }
 
     // Pricing
-    if (clientData.pricing?.length > 0) {
+    if (Array.isArray(clientData.pricing) && clientData.pricing.length > 0) {
         const pricingSummary = clientData.pricing.map(p =>
             `${p.tier}: ${p.price}${p.period || ''}`
         ).join(' | ');
@@ -267,7 +267,7 @@ app.get('/api/elevenlabs/context/:token', (req, res) => {
     }
 
     // Founders
-    if (clientData.founders?.length > 0) {
+    if (Array.isArray(clientData.founders) && clientData.founders.length > 0) {
         const foundersSummary = clientData.founders.map(f =>
             `${f.name} (${f.role})${f.background ? ' - ' + f.background : ''}`
         ).join('; ');
@@ -275,12 +275,12 @@ app.get('/api/elevenlabs/context/:token', (req, res) => {
     }
 
     // Compliance
-    if (clientData.compliance?.length > 0) {
+    if (Array.isArray(clientData.compliance) && clientData.compliance.length > 0) {
         contextLines.push(`COMPLIANCE: ${clientData.compliance.join(', ')}`);
     }
 
     // Reviews
-    if (clientData.reviews?.length > 0) {
+    if (Array.isArray(clientData.reviews) && clientData.reviews.length > 0) {
         const reviewsSummary = clientData.reviews.map(r =>
             `${r.platform}: ${r.score}/5 (${r.count} reviews)`
         ).join(' | ');

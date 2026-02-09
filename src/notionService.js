@@ -162,7 +162,7 @@ async function submitToNotion(data) {
     // ==========================================
     // FOUNDING TEAM
     // ==========================================
-    const founders = clientScraped.founders || [];
+    const founders = Array.isArray(clientScraped.founders) ? clientScraped.founders : [];
     if (founders.length > 0) {
         children.push(divider(), heading(2, '👥', `Founding Team (${founders.length})`));
         for (const founder of founders) {
@@ -207,7 +207,7 @@ async function submitToNotion(data) {
     // ==========================================
     // PRODUCT FEATURES
     // ==========================================
-    const features = clientScraped.features || [];
+    const features = Array.isArray(clientScraped.features) ? clientScraped.features : [];
     children.push(divider(), heading(2, '✨', `Product Features (${features.length})`));
     if (features.length > 0) {
         for (const feature of features) {
@@ -220,7 +220,7 @@ async function submitToNotion(data) {
     // ==========================================
     // INTEGRATIONS
     // ==========================================
-    const integrations = clientScraped.integrations || [];
+    const integrations = Array.isArray(clientScraped.integrations) ? clientScraped.integrations : [];
     children.push(divider(), heading(2, '🔗', `Integrations (${integrations.length})`));
     if (integrations.length > 0) {
         children.push(paragraph(integrations.join(', ')));
@@ -231,7 +231,7 @@ async function submitToNotion(data) {
     // ==========================================
     // PRICING - COMPLETE DETAIL
     // ==========================================
-    const pricing = clientScraped.pricing || [];
+    const pricing = Array.isArray(clientScraped.pricing) ? clientScraped.pricing : [];
     children.push(divider(), heading(2, '💰', `Pricing (${pricing.length} plans)`));
     if (pricing.length > 0) {
         for (const tier of pricing) {
@@ -250,7 +250,7 @@ async function submitToNotion(data) {
     // ==========================================
     // COMPLIANCE AND CERTIFICATIONS
     // ==========================================
-    const compliance = clientScraped.compliance || [];
+    const compliance = Array.isArray(clientScraped.compliance) ? clientScraped.compliance : [];
     if (compliance.length > 0) {
         children.push(divider(), heading(2, '🔒', `Compliance & Certifications (${compliance.length})`));
         children.push(paragraph(compliance.join(', ')));
@@ -259,7 +259,7 @@ async function submitToNotion(data) {
     // ==========================================
     // REVIEWS AND RATINGS
     // ==========================================
-    const reviews = clientScraped.reviews || [];
+    const reviews = Array.isArray(clientScraped.reviews) ? clientScraped.reviews : [];
     if (reviews.length > 0) {
         children.push(divider(), heading(2, '⭐', `Reviews & Ratings (${reviews.length})`));
         for (const review of reviews) {
@@ -277,7 +277,7 @@ async function submitToNotion(data) {
     // ==========================================
     // CASE STUDIES
     // ==========================================
-    const caseStudies = clientScraped.caseStudies || [];
+    const caseStudies = Array.isArray(clientScraped.caseStudies) ? clientScraped.caseStudies : [];
     if (caseStudies.length > 0) {
         children.push(divider(), heading(2, '📊', `Case Studies (${caseStudies.length})`));
         for (const cs of caseStudies) {
@@ -292,7 +292,7 @@ async function submitToNotion(data) {
     // ==========================================
     // TECH STACK
     // ==========================================
-    const techStack = clientScraped.techStack || [];
+    const techStack = Array.isArray(clientScraped.techStack) ? clientScraped.techStack : [];
     if (techStack.length > 0) {
         children.push(divider(), heading(2, '🛠️', `Tech Stack (${techStack.length})`));
         children.push(paragraph(techStack.join(', ')));
@@ -311,7 +311,7 @@ async function submitToNotion(data) {
     // ==========================================
     // COMMON OBJECTIONS (SALES INTEL)
     // ==========================================
-    const objections = clientScraped.commonObjections || [];
+    const objections = Array.isArray(clientScraped.commonObjections) ? clientScraped.commonObjections : [];
     if (objections.length > 0) {
         children.push(divider(), heading(2, '🛡️', `Common Objections (${objections.length})`));
         for (const objection of objections) {
@@ -322,7 +322,7 @@ async function submitToNotion(data) {
     // ==========================================
     // NOTABLE CUSTOMERS (SOCIAL PROOF)
     // ==========================================
-    const notableCustomers = clientScraped.notableCustomers || [];
+    const notableCustomers = Array.isArray(clientScraped.notableCustomers) ? clientScraped.notableCustomers : [];
     if (notableCustomers.length > 0) {
         children.push(divider(), heading(2, '🏢', `Notable Customers (${notableCustomers.length})`));
         children.push(paragraph(notableCustomers.join(', ')));
@@ -346,7 +346,7 @@ async function submitToNotion(data) {
     // ==========================================
     // CONTACT INFORMATION
     // ==========================================
-    const contact = clientScraped.contact || [];
+    const contact = Array.isArray(clientScraped.contact) ? clientScraped.contact : [];
     if (contact.length > 0) {
         children.push(divider(), heading(2, '📞', `Contact (${contact.length})`));
         for (const c of contact) {
@@ -369,8 +369,8 @@ async function submitToNotion(data) {
     // ==========================================
     // CONTENT THEMES / BLOG TOPICS
     // ==========================================
-    const blogTopics = clientScraped.blogTopics || [];
-    const contentThemes = clientScraped.contentThemes || [];
+    const blogTopics = Array.isArray(clientScraped.blogTopics) ? clientScraped.blogTopics : [];
+    const contentThemes = Array.isArray(clientScraped.contentThemes) ? clientScraped.contentThemes : [];
     const allTopics = [...blogTopics, ...contentThemes];
     if (allTopics.length > 0) {
         children.push(divider(), heading(2, '📝', `Content Themes (${allTopics.length})`));
@@ -382,7 +382,7 @@ async function submitToNotion(data) {
     // ==========================================
     // PARTNERSHIPS
     // ==========================================
-    const partnerships = clientScraped.partnerships || [];
+    const partnerships = Array.isArray(clientScraped.partnerships) ? clientScraped.partnerships : [];
     if (partnerships.length > 0) {
         children.push(divider(), heading(2, '🤝', `Partners & Alliances (${partnerships.length})`));
         children.push(paragraph(partnerships.join(', ')));
@@ -391,8 +391,8 @@ async function submitToNotion(data) {
     // ==========================================
     // MARKET SEGMENTS
     // ==========================================
-    const segments = clientScraped.segments || [];
-    const targetMarkets = clientScraped.targetMarkets || [];
+    const segments = Array.isArray(clientScraped.segments) ? clientScraped.segments : [];
+    const targetMarkets = Array.isArray(clientScraped.targetMarkets) ? clientScraped.targetMarkets : [];
     const allSegments = [...segments, ...targetMarkets];
     if (allSegments.length > 0) {
         children.push(divider(), heading(2, '🎯', `Market Segments (${allSegments.length})`));
@@ -444,37 +444,37 @@ async function submitToNotion(data) {
             if (compDetails.industry) children.push(paragraph(compDetails.industry, 'Industry'));
             if (compDetails.tone) children.push(paragraph(compDetails.tone, 'Tone'));
 
-            if (compDetails.features && compDetails.features.length > 0) {
+            if (Array.isArray(compDetails.features) && compDetails.features.length > 0) {
                 children.push(paragraph(compDetails.features.join(', '), 'Features'));
             }
-            if (compDetails.integrations && compDetails.integrations.length > 0) {
+            if (Array.isArray(compDetails.integrations) && compDetails.integrations.length > 0) {
                 children.push(paragraph(compDetails.integrations.join(', '), 'Integrations'));
             }
-            if (compDetails.pricing && compDetails.pricing.length > 0) {
+            if (Array.isArray(compDetails.pricing) && compDetails.pricing.length > 0) {
                 const pricingStr = compDetails.pricing.map(p =>
                     `${p.tier}: ${p.price}${p.period || ''}`
                 ).join(' | ');
                 children.push(paragraph(pricingStr, 'Pricing'));
             }
-            if (compDetails.reviews && compDetails.reviews.length > 0) {
+            if (Array.isArray(compDetails.reviews) && compDetails.reviews.length > 0) {
                 const reviewStr = compDetails.reviews.map(r =>
                     `${r.platform}: ${r.score}/5`
                 ).join(', ');
                 children.push(paragraph(reviewStr, 'Reviews'));
             }
-            if (compDetails.techStack && compDetails.techStack.length > 0) {
+            if (Array.isArray(compDetails.techStack) && compDetails.techStack.length > 0) {
                 children.push(paragraph(compDetails.techStack.join(', '), 'Tech Stack'));
             }
-            if (compDetails.compliance && compDetails.compliance.length > 0) {
+            if (Array.isArray(compDetails.compliance) && compDetails.compliance.length > 0) {
                 children.push(paragraph(compDetails.compliance.join(', '), 'Compliance'));
             }
-            if (compDetails.founders && compDetails.founders.length > 0) {
+            if (Array.isArray(compDetails.founders) && compDetails.founders.length > 0) {
                 const foundersStr = compDetails.founders.map(f =>
                     `${f.name} (${f.role})`
                 ).join(', ');
                 children.push(paragraph(foundersStr, 'Founders'));
             }
-            if (compDetails.limitations && compDetails.limitations.length > 0) {
+            if (Array.isArray(compDetails.limitations) && compDetails.limitations.length > 0) {
                 children.push(paragraph(compDetails.limitations.join(', '), 'Limitations'));
             }
             if (compDetails.social) {
@@ -484,13 +484,13 @@ async function submitToNotion(data) {
                     .join(', ');
                 if (socialStr) children.push(paragraph(socialStr, 'Social Media'));
             }
-            if (compDetails.contact && compDetails.contact.length > 0) {
+            if (Array.isArray(compDetails.contact) && compDetails.contact.length > 0) {
                 const contactStr = compDetails.contact.map(c =>
                     `${c.label}: ${c.value}`
                 ).join(', ');
                 children.push(paragraph(contactStr, 'Contact'));
             }
-            if (compDetails.caseStudies && compDetails.caseStudies.length > 0) {
+            if (Array.isArray(compDetails.caseStudies) && compDetails.caseStudies.length > 0) {
                 const csStr = compDetails.caseStudies.map(cs =>
                     `${cs.company}: ${cs.result}`
                 ).join(' | ');

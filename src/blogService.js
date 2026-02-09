@@ -61,13 +61,14 @@ function isValidBlogUrl(url) {
         const lastSegment = segments[segments.length - 1];
 
         // If path contains blog/article/post indicator, be more lenient
-        const blogIndicators = ['blog', 'post', 'posts', 'article', 'articles', 'news', 'insights', 'resources'];
+        const blogIndicators = ['blog', 'post', 'posts', 'article', 'articles', 'news', 'insights', 'resources',
+            'knowledge-base', 'learn', 'thoughts', 'library', 'guides', 'stories', 'updates', 'journal', 'content', 'ideas', 'writing'];
         const hasBlogIndicator = segments.some(s => blogIndicators.includes(s.toLowerCase()));
 
         // If we have a blog indicator and at least one more segment, accept it
         if (hasBlogIndicator && segments.length >= 2) {
-            // Last segment should look like a slug (has dash, underscore, or >10 chars)
-            if (lastSegment.includes('-') || lastSegment.includes('_') || lastSegment.length > 10) {
+            // Last segment should look like a slug (has dash, underscore, or >5 chars)
+            if (lastSegment.includes('-') || lastSegment.includes('_') || lastSegment.length > 5) {
                 return true;
             }
         }
@@ -117,6 +118,32 @@ function extractJson(text) {
         return JSON.parse(match[0]);
     } catch {
         return null;
+    }
+}
+
+function normalizeUrl(url) {
+    try {
+        if (!url) return '';
+        // Ensure protocol
+        if (!url.startsWith('http')) {
+            url = 'https://' + url;
+        }
+
+        const parsed = new URL(url);
+
+        // Remove 'www.' and lowercase
+        let hostname = parsed.hostname.replace(/^www\./, '').toLowerCase();
+
+        // Remove trailing slash from pathname, lowercase for consistent comparison
+        let pathname = parsed.pathname.toLowerCase();
+        if (pathname.endsWith('/') && pathname.length > 1) {
+            pathname = pathname.slice(0, -1);
+        }
+
+        // Return normalized string (ignore hash/search for blog identity usually)
+        return `${parsed.protocol}//${hostname}${pathname}`;
+    } catch {
+        return url;
     }
 }
 
@@ -322,7 +349,11 @@ async function findBlogsFromScraping(domain, limit = 10) {
     console.log(`[Blog] Fallback: Scraping ${domain} for blog URLs...`);
 
     // Try blog listing pages directly (not sitemaps)
-    const blogPaths = ["/blog", "/resources", "/insights", "/news", "/articles", "/posts"];
+    const blogPaths = [
+        "/blog", "/resources", "/insights", "/news", "/articles", "/posts",
+        "/knowledge-base", "/learn", "/thoughts", "/library", "/guides",
+        "/stories", "/updates", "/journal", "/content", "/ideas", "/writing"
+    ];
 
     for (const path of blogPaths) {
         try {
@@ -411,7 +442,8 @@ async function findBlogsFromScraping(domain, limit = 10) {
                 // If it's an index, fetch the child sitemaps too
                 for (const ref of sitemapRefs.slice(0, 3)) { // Limit to 3 child sitemaps
                     const childUrl = ref.replace(/<\/?loc>/gi, "");
-                    if (childUrl.includes('blog') || childUrl.includes('post')) {
+                    const contentKeywords = ['blog', 'post', 'article', 'news', 'insight', 'resource', 'page', 'content'];
+                    if (contentKeywords.some(kw => childUrl.toLowerCase().includes(kw))) {
                         try {
                             console.log(`[Blog] Fetching child sitemap: ${childUrl}`);
                             const childRes = await axios.get(childUrl, { timeout: 8000 });
@@ -507,15 +539,16 @@ async function getBlogPosts(domain, limit = 10) {
 
     // STRATEGY 2: OpenAI web search (fallback for additional posts)
     // Only if we found too few posts from scraping
-    if (posts.length < 5) {
+    if (posts.length < 8) {
         console.log("[Blog] Step 2: Trying OpenAI web search to find more posts...");
         const aiPosts = await findBlogsWithOpenAI(domain, limit);
 
         if (aiPosts.length > 0) {
-            // Merge, avoiding duplicates
-            const existingUrls = new Set(posts.map(p => p.url));
+            // Merge, avoiding duplicates (use normalized URLs for comparison)
+            const existingUrls = new Set(posts.map(p => normalizeUrl(p.url)));
             for (const post of aiPosts) {
-                if (!existingUrls.has(post.url)) {
+                if (!existingUrls.has(normalizeUrl(post.url))) {
+                    existingUrls.add(normalizeUrl(post.url));
                     posts.push(post);
                 }
             }
@@ -527,6 +560,20 @@ async function getBlogPosts(domain, limit = 10) {
     if (posts.length > 0) {
         posts = await verifyUrls(posts);
     }
+
+    // Deduplicate based on normalized URLs
+    const uniquePosts = [];
+    const seenUrls = new Set();
+
+    for (const post of posts) {
+        const normalized = normalizeUrl(post.url);
+        if (!seenUrls.has(normalized)) {
+            seenUrls.add(normalized);
+            uniquePosts.push(post);
+        }
+    }
+    // Reassign sequential IDs after deduplication
+    posts = uniquePosts.map((post, i) => ({ ...post, id: i + 1 }));
 
     // Limit to top 10
     posts = posts.slice(0, 10);
