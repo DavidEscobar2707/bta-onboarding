@@ -689,4 +689,4 @@ async function getBlogPosts(domain, limit = 10) {
     return posts;
 }
 
-module.exports = { getBlogPosts, scrapeFullBlogContent };
+module.exports = { getBlogPosts, scrapeFullBlogContent, findBlogsWithPerplexity };

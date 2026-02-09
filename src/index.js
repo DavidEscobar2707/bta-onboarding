@@ -1,8 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
-const { generateClientData } = require('./aiService');
+const { generateFullResearch } = require('./aiService');
 const { getBlogPosts } = require('./blogService');
+const { geminiBlogDiscovery } = require('./geminiService');
 const { submitToAirtable, getClientsFromAirtable } = require('./airtableService');
 const { submitToNotion } = require('./notionService');
 require('dotenv').config();
@@ -79,23 +80,28 @@ app.post('/api/onboard', async (req, res) => {
     if (!domain) return res.status(400).json({ error: 'Domain is required' });
 
     try {
-        console.log(`[BTA] Researching: ${domain}`);
-        const aiData = await generateClientData(domain);
+        console.log(`[BTA] Full research pipeline for: ${domain}`);
+        const research = await generateFullResearch(domain);
 
-        if (!aiData) {
-            throw new Error("AI research failed.");
-        }
-
-        const normalized = normalizeAiData(aiData);
+        const normalized = normalizeAiData(research.companyData);
         const name = normalized.name || domain.replace(/\.(com|io|net|org).*/, '');
 
-        console.log(`[BTA] Research complete for ${domain}: about=${!!normalized.about}, features=${normalized.features?.length || 0}, competitors=${normalized.competitors?.length || 0}, pricing=${normalized.pricing?.length || 0}`);
+        // Normalize competitor details too
+        const normalizedCompDetails = {};
+        for (const [compDomain, detail] of Object.entries(research.competitorDetails || {})) {
+            normalizedCompDetails[compDomain] = normalizeAiData(detail);
+        }
+
+        console.log(`[BTA] Research complete for ${domain}: about=${!!normalized.about}, features=${normalized.features?.length || 0}, competitors=${research.competitors?.length || 0}, competitorDetails=${Object.keys(normalizedCompDetails).length}, blogs=${research.blogPosts?.length || 0}`);
 
         res.json({
             domain,
             name: name.charAt(0).toUpperCase() + name.slice(1),
             status: 'success',
             data: normalized,
+            blogPosts: research.blogPosts || [],
+            competitors: research.competitors || [],
+            competitorDetails: normalizedCompDetails,
         });
     } catch (error) {
         console.error('[BTA] Error:', error.message);
@@ -112,7 +118,22 @@ app.post('/api/blogs', async (req, res) => {
 
     try {
         console.log(`[BTA] Finding blog posts for: ${domain}`);
-        const blogPosts = await getBlogPosts(domain, limit);
+
+        // Try Gemini first
+        let blogPosts = [];
+        try {
+            const geminiResult = await geminiBlogDiscovery(domain);
+            blogPosts = geminiResult?.blogPosts || [];
+            console.log(`[BTA] Gemini found ${blogPosts.length} blogs`);
+        } catch (e) {
+            console.log(`[BTA] Gemini blog search failed: ${e.message}, trying Perplexity fallback...`);
+        }
+
+        // Perplexity fallback
+        if (blogPosts.length === 0) {
+            blogPosts = await getBlogPosts(domain, limit);
+        }
+
         res.json({ domain, status: 'success', count: blogPosts.length, blogPosts });
     } catch (error) {
         console.error('[BTA] Blog error:', error.message);
@@ -140,7 +161,7 @@ app.post('/api/sitemap', async (req, res) => {
 // 4. FORM LINK: Generate a shareable link for the client
 // ============================================
 app.post('/api/form/create', (req, res) => {
-    const { domain, clientName, clientData, competitors } = req.body;
+    const { domain, clientName, clientData, competitors, competitorDetails, blogPosts } = req.body;
     if (!domain) return res.status(400).json({ error: 'Domain is required' });
 
     const token = uuidv4();
@@ -149,11 +170,13 @@ app.post('/api/form/create', (req, res) => {
         clientName: clientName || domain,
         clientData: clientData || null,
         competitors: competitors || [],
+        competitorDetails: competitorDetails || {},
+        blogPosts: blogPosts || [],
         createdAt: new Date(),
     };
     formTokens.set(token, tokenData);
 
-    console.log(`[BTA] Form link created for ${domain} | token: ${token} | clientData: ${clientData ? 'YES (' + Object.keys(clientData).join(',') + ')' : 'NO'} | competitors: ${(competitors || []).length}`);
+    console.log(`[BTA] Form link created for ${domain} | token: ${token} | clientData: ${clientData ? 'YES (' + Object.keys(clientData).join(',') + ')' : 'NO'} | competitors: ${(competitors || []).length} | competitorDetails: ${Object.keys(competitorDetails || {}).length} | blogs: ${(blogPosts || []).length}`);
 
     res.json({ status: 'success', token });
 });
@@ -297,6 +320,7 @@ app.get('/api/elevenlabs/context/:token', (req, res) => {
 
     const clientData = data.clientData || {};
     const competitors = data.competitors || [];
+    const competitorDetails = data.competitorDetails || {};
 
     // Build human-readable client context (NOT JSON)
     const contextLines = [];
@@ -360,18 +384,32 @@ app.get('/api/elevenlabs/context/:token', (req, res) => {
         contextLines.push(`BLOG TOPICS: ${clientData.blogTopics.join(', ')}`);
     }
 
-    // Build human-readable competitor summary
+    // Build enriched competitor summary with deep research data
     let competitorSummary = 'No competitors identified yet.';
     if (competitors.length > 0) {
         const competitorLines = competitors.map(comp => {
-            let line = `- ${comp.name || comp.domain} (${comp.domain})`;
-            if (comp.reason) line += `: ${comp.reason}`;
-            if (comp.differentiator) line += `. Differentiator: ${comp.differentiator}`;
-            if (comp.strengthVsTarget) line += `. Strength: ${comp.strengthVsTarget}`;
-            if (comp.weaknessVsTarget) line += `. Weakness: ${comp.weaknessVsTarget}`;
+            const detail = competitorDetails[comp.domain];
+            let line = `- ${comp.name || comp.domain} (${comp.domain}): ${comp.reason || 'competitor'}`;
+            if (detail) {
+                if (detail.usp) line += `\n  USP: ${detail.usp}`;
+                if (detail.about) line += `\n  About: ${detail.about}`;
+                if (Array.isArray(detail.features) && detail.features.length > 0) {
+                    line += `\n  Key Features: ${detail.features.slice(0, 6).join(', ')}`;
+                }
+                if (Array.isArray(detail.pricing) && detail.pricing.length > 0) {
+                    line += `\n  Pricing: ${detail.pricing.map(p => `${p.tier}: ${p.price}${p.period || ''}`).join(' | ')}`;
+                }
+                if (Array.isArray(detail.reviews) && detail.reviews.length > 0) {
+                    line += `\n  Reviews: ${detail.reviews.map(r => `${r.platform}: ${r.score}/5`).join(', ')}`;
+                }
+                if (detail.strengthVsTarget) line += `\n  Strength vs client: ${detail.strengthVsTarget}`;
+                if (detail.weaknessVsTarget) line += `\n  Weakness vs client: ${detail.weaknessVsTarget}`;
+            } else {
+                if (comp.differentiator) line += `. Differentiator: ${comp.differentiator}`;
+            }
             return line;
         });
-        competitorSummary = `Found ${competitors.length} competitor(s):\n${competitorLines.join('\n')}`;
+        competitorSummary = `Found ${competitors.length} competitor(s) with detailed research:\n${competitorLines.join('\n\n')}`;
     }
 
     // Final context object with exact variable names for ElevenLabs prompt
