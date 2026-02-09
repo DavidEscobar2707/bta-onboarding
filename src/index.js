@@ -229,6 +229,7 @@ app.get('/api/elevenlabs/session', async (req, res) => {
 
 // ============================================
 // 9. ELEVENLABS CONTEXT: Provide full context for voice calls
+// Variables match the ElevenLabs prompt: client_name, client_context, competitor_summary
 // ============================================
 app.get('/api/elevenlabs/context/:token', (req, res) => {
     const data = formTokens.get(req.params.token);
@@ -236,44 +237,93 @@ app.get('/api/elevenlabs/context/:token', (req, res) => {
         return res.status(404).json({ error: 'Form not found or expired' });
     }
 
-    // Build comprehensive context for the voice agent
     const clientData = data.clientData || {};
     const competitors = data.competitors || [];
 
-    // Format competitor information for voice agent
-    const competitorSummaries = competitors.map(comp => {
-        return `${comp.name || comp.domain}: ${comp.reason || 'Direct competitor'}`;
-    }).join('. ');
+    // Build human-readable client context (NOT JSON)
+    const contextLines = [];
+    contextLines.push(`COMPANY NAME: ${clientData.name || data.clientName || data.domain}`);
+    contextLines.push(`DOMAIN: ${data.domain}`);
+    if (clientData.about) contextLines.push(`ABOUT: ${clientData.about}`);
+    if (clientData.usp) contextLines.push(`USP (Unique Selling Proposition): ${clientData.usp}`);
+    if (clientData.icp) contextLines.push(`ICP (Ideal Customer Profile): ${clientData.icp}`);
+    if (clientData.industry) contextLines.push(`INDUSTRY: ${clientData.industry}`);
+    if (clientData.niche) contextLines.push(`NICHE: ${clientData.niche}`);
+    if (clientData.tone) contextLines.push(`BRAND TONE: ${clientData.tone}`);
 
-    // Build context object with dynamic variables for ElevenLabs
+    if (clientData.features?.length > 0) {
+        contextLines.push(`FEATURES: ${clientData.features.join(', ')}`);
+    }
+    if (clientData.integrations?.length > 0) {
+        contextLines.push(`INTEGRATIONS: ${clientData.integrations.join(', ')}`);
+    }
+
+    // Pricing
+    if (clientData.pricing?.length > 0) {
+        const pricingSummary = clientData.pricing.map(p =>
+            `${p.tier}: ${p.price}${p.period || ''}`
+        ).join(' | ');
+        contextLines.push(`PRICING: ${pricingSummary}`);
+    }
+
+    // Founders
+    if (clientData.founders?.length > 0) {
+        const foundersSummary = clientData.founders.map(f =>
+            `${f.name} (${f.role})${f.background ? ' - ' + f.background : ''}`
+        ).join('; ');
+        contextLines.push(`FOUNDERS: ${foundersSummary}`);
+    }
+
+    // Compliance
+    if (clientData.compliance?.length > 0) {
+        contextLines.push(`COMPLIANCE: ${clientData.compliance.join(', ')}`);
+    }
+
+    // Reviews
+    if (clientData.reviews?.length > 0) {
+        const reviewsSummary = clientData.reviews.map(r =>
+            `${r.platform}: ${r.score}/5 (${r.count} reviews)`
+        ).join(' | ');
+        contextLines.push(`REVIEWS: ${reviewsSummary}`);
+    }
+
+    // Support
+    if (clientData.support) {
+        contextLines.push(`SUPPORT: ${typeof clientData.support === 'string' ? clientData.support : JSON.stringify(clientData.support)}`);
+    }
+
+    // Limitations
+    if (clientData.limitations?.length > 0) {
+        contextLines.push(`KNOWN LIMITATIONS: ${clientData.limitations.join('; ')}`);
+    }
+
+    // Blog topics
+    if (clientData.blogTopics?.length > 0) {
+        contextLines.push(`BLOG TOPICS: ${clientData.blogTopics.join(', ')}`);
+    }
+
+    // Build human-readable competitor summary
+    let competitorSummary = 'No competitors identified yet.';
+    if (competitors.length > 0) {
+        const competitorLines = competitors.map(comp => {
+            let line = `- ${comp.name || comp.domain} (${comp.domain})`;
+            if (comp.reason) line += `: ${comp.reason}`;
+            if (comp.differentiator) line += `. Differentiator: ${comp.differentiator}`;
+            if (comp.strengthVsTarget) line += `. Strength: ${comp.strengthVsTarget}`;
+            if (comp.weaknessVsTarget) line += `. Weakness: ${comp.weaknessVsTarget}`;
+            return line;
+        });
+        competitorSummary = `Found ${competitors.length} competitor(s):\n${competitorLines.join('\n')}`;
+    }
+
+    // Final context object with exact variable names for ElevenLabs prompt
     const context = {
-        // Basic client info
         client_name: data.clientName || clientData.name || data.domain,
-        client_domain: data.domain,
-
-        // Company details from scraped data
-        client_usp: clientData.usp || 'Not available',
-        client_icp: clientData.icp || 'Not available',
-        client_industry: clientData.industry || 'Not available',
-        client_niche: clientData.niche || 'Not available',
-        client_about: clientData.about || 'Not available',
-
-        // Features and integrations
-        client_features: (clientData.features || []).join(', ') || 'Not available',
-        client_integrations: (clientData.integrations || []).join(', ') || 'Not available',
-
-        // Competitor information
-        competitor_count: competitors.length,
-        competitor_names: competitors.map(c => c.name || c.domain).join(', ') || 'None identified',
-        competitor_details: competitorSummaries || 'No competitor details available',
-
-        // Full data for advanced use
-        full_client_data: JSON.stringify(clientData),
-        full_competitor_data: JSON.stringify(competitors)
+        client_context: contextLines.join('\n'),
+        competitor_summary: competitorSummary
     };
 
-    console.log(`[ElevenLabs] Context requested for ${context.client_name}`);
-    console.log(`[ElevenLabs] Providing ${Object.keys(context).length} dynamic variables`);
+    console.log(`[ElevenLabs] Context for ${context.client_name}: ${contextLines.length} data points, ${competitors.length} competitors`);
 
     res.json(context);
 });

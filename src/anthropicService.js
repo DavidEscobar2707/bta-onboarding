@@ -5,127 +5,94 @@ const Anthropic = require('@anthropic-ai/sdk');
  * Uses more context and asks for detailed competitive analysis
  */
 function getDeepResearchPrompt(domain) {
-    return `You are a senior market researcher conducting deep competitive intelligence on a company.
+    return `You are a competitive intelligence analyst. Research https://${domain} exhaustively using web search.
 
-RESEARCH TARGET: https://${domain}
+RESEARCH PROCESS:
+1. Visit the website and search "${domain}", "${domain} about", "${domain} how it works"
+2. Search "${domain} pricing", "${domain} features", "${domain} integrations", "${domain} API"
+3. Search "${domain} reviews G2", "${domain} reviews Capterra", "${domain} Trustpilot"
+4. Search "${domain} founders", "${domain} Crunchbase", "${domain} funding"
+5. Search "${domain} case study", "${domain} customers", "${domain} testimonials"
+6. Search "${domain} competitors", "${domain} alternatives", "${domain} vs"
+7. Search "${domain} complaints", "${domain} limitations", "${domain} reddit"
+8. Search "${domain} security", "${domain} SOC 2", "${domain} GDPR"
+9. Search "${domain} blog", "${domain} Twitter", "${domain} LinkedIn", "${domain} contact"
 
-Your task is to provide an EXHAUSTIVE analysis of this company and their competitive landscape.
-Use your knowledge to research every aspect you can find.
+For each confirmed competitor, also search "[competitor] vs ${domain}", "[competitor] pricing", "[competitor] reviews G2".
 
-RESEARCH METHODOLOGY:
-1. Analyze the company's website, product pages, pricing, about section
-2. Find their exact market positioning and ideal customer profile
-3. Identify their complete feature set and technical integrations
-4. Research their founding team, funding history, and company size
-5. Find real review scores from G2, Capterra, TrustRadius
-6. Discover their most successful case studies and customer wins
-7. Identify ALL direct competitors who sell the same product to the same buyer
-8. Research limitations, known issues, or gaps in their offering
+COMPETITOR RULES:
+- Define the company's SPECIFIC niche first: [technology] + [product type] + [target buyer]
+- A valid competitor must: sell the SAME product type, to the SAME buyer persona, at the SAME market tier
+- A real buyer would have both on their shortlist
+- REJECT broad platforms with overlapping features (Salesforce, HubSpot, etc.)
+- Empty array is better than wrong competitors
 
-COMPETITOR ANALYSIS REQUIREMENTS:
-For each competitor, you MUST provide:
-- Their exact website domain
-- Their company name
-- A specific reason why they compete (same product + same buyer)
-- What makes them different from the target company
+DATA INTEGRITY:
+- Only include information confirmed via search. Never invent data.
+- Use null for anything you can't verify.
+- Set confidence honestly based on what you actually found.
 
-CRITICAL RULES:
-- Be extremely thorough - this is for a sales team preparation
-- Only include VERIFIED information you are confident about
-- For anything uncertain, use null
-- Competitors must be DIRECT - not adjacent categories
-- Include pricing tiers if publicly available
-- Include ALL integrations you can find
+Return ONLY valid JSON:
 
-Return ONLY valid JSON with this structure:
 {
-    "name": "Company Name (official)",
-    "usp": "Their unique selling proposition - what makes them different",
-    "icp": "Ideal Customer Profile - who buys this and why",
-    "tone": "Brand voice description - formal, casual, technical, friendly, etc.",
-    "about": "Company description in 3-4 sentences covering what they do and their mission",
-    "industry": "Primary industry they serve",
-    "niche": "Ultra-specific product niche in 10-20 words - be very precise",
-    "founded": "Year founded or null",
-    "headquarters": "City, Country or null",
-    "employeeCount": "Approximate employee count or range, or null",
-    "features": ["Feature 1", "Feature 2", "...complete list"],
-    "integrations": ["Integration 1", "Integration 2", "...complete list"],
-    "pricing": [
-        {
-            "tier": "Plan Name",
-            "price": "$X",
-            "period": "/month or /year",
-            "features": ["What's included"],
-            "bestFor": "Who this tier is for"
-        }
-    ],
-    "founders": [
-        {
-            "name": "Full Name",
-            "role": "Title",
-            "background": "Previous experience, education, notable achievements",
-            "linkedin": "LinkedIn URL or null"
-        }
-    ],
-    "funding": {
-        "totalRaised": "$X or null",
-        "lastRound": "Series X or null",
-        "investors": ["Investor names"] 
-    },
-    "compliance": ["SOC2", "GDPR", "HIPAA", "etc."],
-    "reviews": [
-        {
-            "platform": "G2",
-            "score": "4.8",
-            "count": "150",
-            "topPros": ["What users love"],
-            "topCons": ["Common complaints"]
-        }
-    ],
-    "caseStudies": [
-        {
-            "company": "Customer name",
-            "industry": "Their industry",
-            "result": "Specific outcome achieved",
-            "quote": "Customer testimonial if available"
-        }
-    ],
-    "competitors": [
-        {
-            "domain": "competitor.com",
-            "name": "Competitor Name",
-            "reason": "Both offer [specific product] to [specific buyer persona]",
-            "differentiator": "What makes them different from target company",
-            "strengthVsTarget": "Where they're stronger",
-            "weaknessVsTarget": "Where they're weaker"
-        }
-    ],
-    "social": {
-        "twitter": "handle or null",
-        "linkedin": "company URL or null",
-        "github": "handle or null",
-        "youtube": "channel URL or null"
-    },
-    "techStack": ["Known technologies used"],
-    "limitations": ["Known limitations or gaps"],
-    "support": {
-        "channels": ["email", "chat", "phone"],
-        "hours": "24/7 or business hours",
-        "sla": "Response time guarantees if known"
-    },
-    "contact": [
-        {"label": "Sales Email", "value": "sales@domain.com"},
-        {"label": "Support", "value": "support@domain.com"},
-        {"label": "Phone", "value": "+1-xxx-xxx-xxxx"}
-    ],
-    "blogTopics": ["Recent content themes they publish about"],
-    "targetMarkets": ["Geographic or industry markets they focus on"],
-    "partnerships": ["Named technology or channel partners"],
-    "confidence": "high | medium | low"
-}
-
-RESPOND ONLY WITH THE JSON, no markdown, no explanation, no extra text.`;
+  "name": "Official Company Name",
+  "domain": "${domain}",
+  "usp": "Unique selling proposition or null",
+  "icp": {
+    "buyerPersona": "Decision-maker job title(s) or null",
+    "companySize": "SMB | Mid-Market | Enterprise or null",
+    "industries": ["Target verticals"],
+    "triggerEvents": ["What causes someone to buy this"]
+  },
+  "tone": "Brand voice description or null",
+  "about": "3-4 sentence company description or null",
+  "industry": "Primary industry or null",
+  "niche": "Ultra-specific: [technology] + [product type] + [target buyer]",
+  "productModel": "SaaS | API | Marketplace | Other or null",
+  "yearFounded": "YYYY or null",
+  "headquarters": "Location or null",
+  "employeeRange": "e.g. '51-200' or null",
+  "features": [{"category": "Category name", "items": ["Specific features"]}],
+  "integrations": ["Verified integrations"],
+  "pricing": {
+    "model": "Per seat | Per usage | Flat rate | Custom or null",
+    "freeTrial": true,
+    "tiers": [{"tier": "Name", "price": "Amount", "period": "/month", "features": ["..."], "recommended": false}],
+    "contractNotes": "Annual discounts, minimums, etc. or null"
+  },
+  "founders": [{"name": "Name", "role": "Title", "background": "Info", "linkedin": "URL or null"}],
+  "funding": {
+    "totalRaised": "$XM or null",
+    "lastRound": "Series X - $XM - Date or null",
+    "investors": ["Notable investors"],
+    "stage": "Seed | Series A | Bootstrapped | etc. or null"
+  },
+  "compliance": ["SOC 2", "GDPR", "HIPAA"],
+  "reviews": [{"platform": "G2", "score": "4.8", "count": "150", "positiveThemes": ["..."], "negativeThemes": ["..."]}],
+  "caseStudies": [{"company": "Client", "result": "Quantified outcome", "industry": "Industry", "source": "URL"}],
+  "notableCustomers": ["Named logos found publicly"],
+  "competitors": [
+    {
+      "domain": "competitor.com",
+      "name": "Name",
+      "reason": "Both offer [product] to [buyer]",
+      "differentiator": "Key positioning difference",
+      "strengthVsTarget": "Where they're stronger (specific)",
+      "weaknessVsTarget": "Where they're weaker (specific)",
+      "pricingComparison": "Cheaper | Similar | More expensive | Unknown"
+    }
+  ],
+  "social": {"twitter": "null", "linkedin": "null", "github": "null", "youtube": "null"},
+  "support": {"channels": ["live chat", "email"], "hours": "24/7 or null"},
+  "contact": [{"label": "Sales", "value": "email@domain.com", "type": "email"}],
+  "limitations": ["Verified limitations from real user feedback"],
+  "commonObjections": ["Sales objections a buyer might raise"],
+  "blogTopics": ["5-10 recent content themes"],
+  "confidence": "high | medium | low",
+  "confidenceNotes": "What you verified vs. what had gaps",
+  "searchesPerformed": ["Every query you ran"],
+  "researchDate": "YYYY-MM-DD"
+}`;
 }
 
 /**

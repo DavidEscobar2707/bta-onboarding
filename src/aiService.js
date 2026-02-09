@@ -3,54 +3,208 @@ const OpenAI = require("openai");
 const { tryClaudeOpus } = require("./anthropicService");
 
 function getPrompt(domain) {
-    return `
-You MUST use Google Search to research the company at https://${domain}. Do NOT rely on your training data alone.
+    return `You are a senior market research analyst. Your task is to produce a comprehensive intelligence report on the company at https://${domain}. 
 
-STEP 1: Search for "${domain}" and visit the actual website to understand what they do.
-STEP 2: Search for "${domain} competitors" and "${domain} alternatives" to find real competitors.
-STEP 3: Search for "${domain} pricing", "${domain} reviews G2 Capterra", "${domain} founders" for additional info.
+You MUST use web search extensively. Do NOT rely on training data. Every claim must be sourced from live search results or the company's actual website. If you cannot verify something, use null or an empty array — never fabricate data.
 
-CRITICAL RULES:
-- Only include information you found via web search or from the company's actual website.
-- If you cannot verify something, use null or empty array.
-- Do NOT invent founders, pricing, reviews, or case studies.
-- Do NOT guess — if the search returns nothing, leave it empty.
+═══════════════════════════════════════
+RESEARCH PROCESS (follow in order)
+═══════════════════════════════════════
 
-COMPETITORS — FOLLOW THIS PROCESS:
-1. First determine the company's SPECIFIC product niche (write it in the "niche" field). Be ultra-specific — e.g. "AI phone receptionist for car dealerships", NOT "AI company".
-2. Search for "[company name] competitors" and "[company name] alternatives" on Google.
-3. ONLY list competitors who sell the SAME type of product to the SAME buyer persona.
-4. VALIDATE: "Would a customer evaluating this company also have the competitor on their shortlist?"
-5. DO NOT include companies from broader/adjacent categories (e.g. Salesforce, HubSpot, Zendesk are NOT competitors to niche vertical tools).
-6. If you cannot find real direct competitors, return an EMPTY array.
+PHASE 1 — COMPANY FOUNDATION
+─────────────────────────────
+1. Search "${domain}" and visit the website. Read the homepage, about page, and product/features pages.
+2. Search "${domain} what is" and "${domain} company overview" to understand their core offering.
+3. Identify and document:
+   - What they sell (product type, delivery model — SaaS, API, hardware, etc.)
+   - Who they sell to (buyer persona, company size, industry vertical)
+   - Their primary value proposition (why someone buys THIS vs. building or doing nothing)
+   - Brand tone and positioning (enterprise vs. SMB, technical vs. non-technical, playful vs. corporate)
 
-Return ONLY valid JSON with this structure:
+PHASE 2 — COMMERCIAL DETAILS
+─────────────────────────────
+4. Search "${domain} pricing", "${domain} plans", "how much does ${domain} cost"
+   - Look for pricing pages, comparison blog posts, and community discussions
+5. Search "${domain} integrations", "${domain} API", "${domain} tech stack"
+   - Check for integrations pages, developer docs, and BuiltWith/Wappalyzer data
+6. Search "${domain} features", "${domain} product tour", "${domain} changelog"
+   - Look for feature comparison pages and recent product updates
+
+PHASE 3 — CREDIBILITY & SOCIAL PROOF
+─────────────────────────────────────
+7. Search "${domain} reviews G2", "${domain} reviews Capterra", "${domain} Trustpilot"
+   - Record platform, score, review count, and any recurring praise/complaints
+8. Search "${domain} case study", "${domain} customer stories", "${domain} testimonials"
+   - Document real customer names, industries, and quantified results only
+9. Search "${domain} SOC 2", "${domain} GDPR", "${domain} HIPAA", "${domain} security"
+   - Note any compliance certifications or security pages
+
+PHASE 4 — PEOPLE & BACKSTORY
+─────────────────────────────
+10. Search "${domain} founders", "${domain} leadership team", "${domain} Crunchbase"
+    - Cross-reference with LinkedIn and Crunchbase profiles
+11. Search "${domain} funding", "${domain} Series", "${domain} investors"
+    - Note funding rounds, amounts, and lead investors if available
+12. Search "${domain} blog", "${domain} content" 
+    - Identify 5-10 recent blog topics/themes to understand their content strategy
+
+PHASE 5 — CONTACT & SOCIAL PRESENCE
+────────────────────────────────────
+13. Search "${domain} Twitter", "${domain} LinkedIn", "${domain} GitHub"
+    - Collect social handles and approximate follower counts if visible
+14. Search "${domain} support", "${domain} contact", "${domain} help center"
+    - Note support channels (chat, email, phone, community forum, knowledge base)
+
+PHASE 6 — COMPETITOR IDENTIFICATION (CRITICAL — READ CAREFULLY)
+───────────────────────────────────────────────────────────────
+This is the most important phase. Follow each step precisely:
+
+Step A: Define the SPECIFIC product niche in 5-15 words.
+   - GOOD: "AI-powered phone answering service for solo law firms"
+   - BAD: "AI company" / "customer service software" / "SaaS platform"
+   - The niche must include: [technology/approach] + [product type] + [target buyer]
+
+Step B: Run these searches:
+   - "[company name] competitors"
+   - "[company name] alternatives"
+   - "[company name] vs"
+   - "best [product niche keywords] software"
+   - "alternatives to [company name] for [ICP]"
+   - Check G2 category pages and comparison sites (e.g., G2, AlternativeTo, Capterra)
+
+Step C: For EACH potential competitor, apply this validation:
+   ┌──────────────────────────────────────────────────────────────┐
+   │ INCLUDE only if ALL of these are true:                       │
+   │ ✓ Sells the SAME type of product (not adjacent)              │
+   │ ✓ Targets the SAME buyer persona / industry vertical         │
+   │ ✓ A real buyer would have BOTH on their shortlist             │
+   │ ✓ Competes at the SAME level (SMB vs. enterprise alignment)  │
+   │                                                               │
+   │ EXCLUDE if ANY of these are true:                             │
+   │ ✗ It's a platform/suite that happens to have an overlapping   │
+   │   feature (e.g., Salesforce, HubSpot, Zendesk)               │
+   │ ✗ It's in a broader/parent category                           │
+   │ ✗ It targets a fundamentally different buyer                  │
+   │ ✗ You're only guessing — you didn't find it via search        │
+   └──────────────────────────────────────────────────────────────┘
+
+Step D: For each validated competitor, search "[competitor] vs ${domain}" and 
+        "[competitor] pricing" to gather differentiating context.
+
+Step E: If you find fewer than 2 real direct competitors, that's fine — 
+        return what you found. Do NOT pad the list with tangential companies.
+
+PHASE 7 — LIMITATIONS & GAPS
+─────────────────────────────
+15. Search "${domain} complaints", "${domain} problems", "${domain} limitations"
+    - Look at review sites, Reddit, forums for recurring pain points
+16. Search "${domain} missing features", "${domain} feature request"
+    - Note what customers wish the product had
+
+═══════════════════════════════════════
+OUTPUT FORMAT
+═══════════════════════════════════════
+
+Return ONLY valid JSON. No markdown wrapping. No explanation before or after.
+
 {
-    "name": "Company name",
-    "usp": "Unique Selling Proposition or null",
-    "icp": "Ideal Customer Profile or null",
-    "tone": "Brand tone description or null",
-    "about": "Company description (2-3 sentences) or null",
-    "industry": "Primary industry or null",
-    "niche": "Ultra-specific product niche in 5-15 words",
-    "features": ["Known features"],
-    "integrations": ["Known integrations"],
-    "pricing": [{"tier": "Name", "price": "Amount", "period": "/month", "features": ["..."]}],
-    "founders": [{"name": "Name", "role": "Role", "background": "Info"}],
-    "compliance": ["soc2", "gdpr"],
-    "reviews": [{"platform": "G2", "score": "4.8", "count": "150"}],
-    "caseStudies": [{"company": "Client", "result": "Result", "industry": "Industry"}],
-    "competitors": [{"domain": "competitor.com", "name": "Name", "reason": "Both sell [product] to [buyer]"}],
-    "social": {"twitter": "handle or null", "linkedin": "url or null", "github": "handle or null"},
-    "techStack": ["Known technologies"],
-    "limitations": ["Known limitations"],
-    "support": "Support info or null",
-    "contact": [{"label": "Email", "value": "email@domain.com", "icon": "mail"}],
-    "blogTopics": ["Recent blog topics or themes found"],
-    "confidence": "high | medium | low"
+  "name": "Company name",
+  "domain": "${domain}",
+  "usp": "Unique Selling Proposition — what makes them different from alternatives, or null",
+  "icp": "Ideal Customer Profile — specific buyer persona, company size, industry, or null",
+  "tone": "Brand voice description (e.g., 'Professional but approachable, targets non-technical SMB owners') or null",
+  "about": "Company description in 2-4 sentences covering what they do, for whom, and how, or null",
+  "industry": "Primary industry vertical or null",
+  "niche": "Ultra-specific product niche in 5-15 words (see Phase 6, Step A)",
+  "yearFounded": "YYYY or null",
+  "headquarters": "City, State/Country or null",
+  "employeeRange": "e.g., '11-50', '51-200' or null",
+  "fundingTotal": "e.g., '$15M Series A' or null",
+  "features": ["List of verified product features — be specific, not generic"],
+  "integrations": ["Verified integrations with other tools/platforms"],
+  "pricing": [
+    {
+      "tier": "Plan name",
+      "price": "Dollar amount or 'Custom'",
+      "period": "/month or /year or /user/month",
+      "features": ["Key features included in this tier"],
+      "highlight": true
+    }
+  ],
+  "founders": [
+    {
+      "name": "Full name",
+      "role": "Title",
+      "background": "Brief relevant background (prior companies, expertise)",
+      "linkedin": "URL or null"
+    }
+  ],
+  "compliance": ["soc2", "gdpr", "hipaa", "ccpa", "iso27001"],
+  "reviews": [
+    {
+      "platform": "G2 | Capterra | Trustpilot | ProductHunt",
+      "score": "4.8",
+      "count": "150",
+      "summary": "One-sentence summary of recurring review themes or null"
+    }
+  ],
+  "caseStudies": [
+    {
+      "company": "Customer company name",
+      "result": "Specific quantified outcome (e.g., '40% reduction in call abandonment')",
+      "industry": "Customer's industry",
+      "source": "URL where this case study was found"
+    }
+  ],
+  "competitors": [
+    {
+      "domain": "competitor.com",
+      "name": "Competitor Name",
+      "reason": "Both sell [specific product] to [specific buyer persona]",
+      "differentiator": "How they differ from ${domain} (pricing, features, positioning)",
+      "estimatedSize": "Relative size indicator — 'smaller', 'similar', 'larger' or null"
+    }
+  ],
+  "social": {
+    "twitter": "handle or null",
+    "linkedin": "URL or null",
+    "github": "handle or null",
+    "youtube": "URL or null",
+    "facebook": "URL or null"
+  },
+  "techStack": ["Known/detected technologies (e.g., 'React', 'AWS', 'Stripe')"],
+  "limitations": ["Verified limitations or common complaints from real user feedback"],
+  "support": {
+    "channels": ["live chat", "email", "phone", "knowledge base", "community forum"],
+    "hours": "24/7 or business hours or null",
+    "notes": "Any notable support details or null"
+  },
+  "contact": [
+    {"label": "Sales Email", "value": "sales@domain.com", "icon": "mail"},
+    {"label": "Phone", "value": "+1-xxx-xxx-xxxx", "icon": "phone"},
+    {"label": "Demo", "value": "https://domain.com/demo", "icon": "calendar"}
+  ],
+  "blogTopics": ["5-10 recent blog themes that reveal their content/SEO strategy"],
+  "contentStrategy": "Brief description of their content marketing approach or null",
+  "confidence": "high | medium | low",
+  "confidenceNotes": "Explain what you could and couldn't verify — be transparent about gaps",
+  "researchDate": "YYYY-MM-DD",
+  "searchesPerformed": ["List the actual search queries you ran for auditability"]
 }
 
-RESPOND ONLY WITH THE JSON, no markdown, no extra text.`;
+═══════════════════════════════════════
+QUALITY RULES
+═══════════════════════════════════════
+
+1. NEVER invent data. If a search returns nothing, use null or [].
+2. NEVER guess at founders, pricing, metrics, or case studies.
+3. ALWAYS prefer specificity over generality (features, niche, ICP).
+4. Competitors must pass the validation test in Phase 6, Step C.
+5. Include "searchesPerformed" so the output is auditable.
+6. Set "confidence" honestly:
+   - "high" = found pricing, reviews, clear product info, and competitors
+   - "medium" = found most info but some gaps (e.g., no pricing page, limited reviews)
+   - "low" = sparse information available, early-stage company, or limited web presence`;
 }
 
 function parseJson(text) {
