@@ -254,6 +254,17 @@ async function scrapeFullBlogContent(url) {
 
         console.log(`[Blog] Scraped ${content.length} chars, ${wordCount} words from ${url}`);
 
+        // Detect repetitive/garbled content (marketing copy scraped badly)
+        const sentences = content.split(/[.!?]\s+/).filter(s => s.length > 20);
+        if (sentences.length >= 4) {
+            const unique = new Set(sentences.map(s => s.trim().toLowerCase().substring(0, 60)));
+            const repetitionRatio = unique.size / sentences.length;
+            if (repetitionRatio < 0.4) {
+                console.log(`[Blog] Rejected (repetitive content, ${Math.round(repetitionRatio * 100)}% unique): ${url}`);
+                return null;
+            }
+        }
+
         // Only return if we got meaningful content
         if (content.length < 100 || wordCount < 20) {
             console.log(`[Blog] Insufficient content from ${url}`);
@@ -300,7 +311,7 @@ async function findBlogsWithPerplexity(domain, limit = 10) {
                 },
                 {
                     role: "user",
-                    content: `Find ${limit} REAL blog posts or articles published on ${domain}.
+                    content: `Find up to ${limit} REAL blog posts or articles published on ${domain}.
 
 Search for: site:${domain}/blog OR site:${domain}/resources OR site:${domain}/insights
 
@@ -308,6 +319,7 @@ IMPORTANT:
 - Return ONLY actual article/blog post URLs (not category pages, tag pages, or sitemaps)
 - URLs should be individual articles with slugs like "/blog/article-name"
 - Do NOT include URLs ending in /blog/, /resources/, /category/, /tag/, /author/
+- Only return posts that ACTUALLY EXIST. If the site has 3 blog posts, return 3 — do NOT invent URLs to fill a quota.
 
 For each REAL article found:
 - The exact full URL
@@ -548,28 +560,27 @@ async function getBlogPosts(domain, limit = 10) {
 
     let posts = [];
 
-    // STRATEGY 1: Direct scraping + Sitemap (most reliable)
-    // This actually crawls the site and finds real URLs
-    console.log("[Blog] Step 1: Crawling site and sitemaps for blog URLs...");
-    posts = await findBlogsFromScraping(domain, limit);
-    console.log(`[Blog] Scraping found ${posts.length} blog posts`);
+    // STRATEGY 1: Perplexity web search (primary - finds real blog posts)
+    console.log("[Blog] Step 1: Using Perplexity to find blog posts...");
+    posts = await findBlogsWithPerplexity(domain, limit);
+    console.log(`[Blog] Perplexity found ${posts.length} blog posts`);
 
-    // STRATEGY 2: Perplexity web search (fallback for additional posts)
-    // Only if we found too few posts from scraping
+    // STRATEGY 2: Direct scraping + Sitemap (fallback for additional posts)
+    // Only if Perplexity found too few posts
     if (posts.length < 8) {
-        console.log("[Blog] Step 2: Trying Perplexity web search to find more posts...");
-        const aiPosts = await findBlogsWithPerplexity(domain, limit);
+        console.log("[Blog] Step 2: Crawling site and sitemaps for more blog URLs...");
+        const scrapedPosts = await findBlogsFromScraping(domain, limit);
 
-        if (aiPosts.length > 0) {
+        if (scrapedPosts.length > 0) {
             // Merge, avoiding duplicates (use normalized URLs for comparison)
             const existingUrls = new Set(posts.map(p => normalizeUrl(p.url)));
-            for (const post of aiPosts) {
+            for (const post of scrapedPosts) {
                 if (!existingUrls.has(normalizeUrl(post.url))) {
                     existingUrls.add(normalizeUrl(post.url));
                     posts.push(post);
                 }
             }
-            console.log(`[Blog] After Perplexity merge: ${posts.length} total posts`);
+            console.log(`[Blog] After scraping merge: ${posts.length} total posts`);
         }
     }
 

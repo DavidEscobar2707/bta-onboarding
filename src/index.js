@@ -17,6 +17,61 @@ const PORT = process.env.PORT || 3000;
 const formTokens = new Map();
 
 // ============================================
+// Normalize AI data so all fields match what the frontend expects
+// (prevents React error #31: objects rendered as children)
+// ============================================
+function normalizeAiData(data) {
+    if (!data) return data;
+    const d = { ...data };
+
+    // support: object {channels, hours, notes} → string
+    if (d.support && typeof d.support === 'object') {
+        const parts = [];
+        if (Array.isArray(d.support.channels) && d.support.channels.length) {
+            parts.push(`Channels: ${d.support.channels.join(', ')}`);
+        }
+        if (d.support.hours) parts.push(`Hours: ${d.support.hours}`);
+        if (d.support.notes) parts.push(d.support.notes);
+        d.support = parts.join('. ') || '';
+    }
+
+    // icp: object {buyerPersona, companySize, industries, triggerEvents} → string
+    if (d.icp && typeof d.icp === 'object') {
+        const parts = [];
+        if (d.icp.buyerPersona) parts.push(d.icp.buyerPersona);
+        if (d.icp.companySize) parts.push(d.icp.companySize);
+        if (Array.isArray(d.icp.industries) && d.icp.industries.length) {
+            parts.push(d.icp.industries.join(', '));
+        }
+        d.icp = parts.join(' | ') || '';
+    }
+
+    // funding: object {totalRaised, lastRound, investors, stage} → string
+    if (d.funding && typeof d.funding === 'object') {
+        const parts = [];
+        if (d.funding.totalRaised) parts.push(d.funding.totalRaised);
+        if (d.funding.lastRound) parts.push(d.funding.lastRound);
+        if (d.funding.stage) parts.push(d.funding.stage);
+        d.fundingTotal = parts.join(' — ') || d.fundingTotal || '';
+        delete d.funding;
+    }
+
+    // pricing: object {model, tiers, ...} → array of tiers
+    if (d.pricing && !Array.isArray(d.pricing) && typeof d.pricing === 'object') {
+        d.pricing = Array.isArray(d.pricing.tiers) ? d.pricing.tiers : [];
+    }
+
+    // features: array of {category, items} → flat array of strings
+    if (Array.isArray(d.features) && d.features.length > 0 && d.features[0]?.items) {
+        d.features = d.features.flatMap(f =>
+            Array.isArray(f.items) ? f.items : [f]
+        );
+    }
+
+    return d;
+}
+
+// ============================================
 // 1. ONBOARD: Research a domain via LLM
 // ============================================
 app.post('/api/onboard', async (req, res) => {
@@ -31,13 +86,14 @@ app.post('/api/onboard', async (req, res) => {
             throw new Error("AI research failed.");
         }
 
-        const name = aiData.name || domain.replace(/\.(com|io|net|org).*/, '');
+        const normalized = normalizeAiData(aiData);
+        const name = normalized.name || domain.replace(/\.(com|io|net|org).*/, '');
 
         res.json({
             domain,
             name: name.charAt(0).toUpperCase() + name.slice(1),
             status: 'success',
-            data: aiData,
+            data: normalized,
         });
     } catch (error) {
         console.error('[BTA] Error:', error.message);
