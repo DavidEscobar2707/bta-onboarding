@@ -52,7 +52,13 @@ async function submitToAirtable(data) {
         funding: clientScraped.funding || '',
         teamSize: clientScraped.teamSize || '',
         guarantees: clientScraped.guarantees || '',
-        roadmap: clientScraped.roadmap || ''
+        roadmap: clientScraped.roadmap || '',
+        // NEW FIELDS
+        commonObjections: clientScraped.commonObjections || [],
+        notableCustomers: clientScraped.notableCustomers || [],
+        searchesPerformed: clientScraped.searchesPerformed || [],
+        confidenceNotes: clientScraped.confidenceNotes || '',
+        researchDate: clientScraped.researchDate || ''
     };
 
     // ============================================
@@ -65,6 +71,12 @@ async function submitToAirtable(data) {
             domain: comp.domain,
             name: comp.name || compScrapedData.name || '',
             reason: comp.reason || '',
+
+            // Comparison fields (from Claude)
+            differentiator: comp.differentiator || '',
+            strengthVsTarget: comp.strengthVsTarget || '',
+            weaknessVsTarget: comp.weaknessVsTarget || '',
+            pricingComparison: comp.pricingComparison || '',
 
             // Full scraped data from competitor
             usp: compScrapedData.usp || '',

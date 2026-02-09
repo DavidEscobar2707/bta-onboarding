@@ -301,12 +301,31 @@ async function submitToNotion(data) {
     // ==========================================
     // KNOWN LIMITATIONS
     // ==========================================
-    const limitations = clientScraped.limitations || [];
     if (limitations.length > 0) {
         children.push(divider(), heading(2, '⚠️', `Known Limitations (${limitations.length})`));
         for (const limitation of limitations) {
             children.push(bullet(limitation));
         }
+    }
+
+    // ==========================================
+    // COMMON OBJECTIONS (SALES INTEL)
+    // ==========================================
+    const objections = clientScraped.commonObjections || [];
+    if (objections.length > 0) {
+        children.push(divider(), heading(2, '🛡️', `Common Objections (${objections.length})`));
+        for (const objection of objections) {
+            children.push(bullet(objection));
+        }
+    }
+
+    // ==========================================
+    // NOTABLE CUSTOMERS (SOCIAL PROOF)
+    // ==========================================
+    const notableCustomers = clientScraped.notableCustomers || [];
+    if (notableCustomers.length > 0) {
+        children.push(divider(), heading(2, '🏢', `Notable Customers (${notableCustomers.length})`));
+        children.push(paragraph(notableCustomers.join(', ')));
     }
 
     // ==========================================
