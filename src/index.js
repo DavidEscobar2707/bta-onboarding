@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
-const { generateFullResearch } = require('./aiService');
+const { generateFullResearch, perplexityCompetitorDeepResearch } = require('./aiService');
 const { getBlogPosts } = require('./blogService');
 const { submitToAirtable, getClientsFromAirtable } = require('./airtableService');
 const { submitToNotion } = require('./notionService');
@@ -109,8 +109,22 @@ app.post('/api/onboard', async (req, res) => {
 });
 
 // ============================================
-// 2. BLOGS: Find blog posts via AI (replaces scraper)
+// 1.5 DEEP RESEARCH: Lazy load competitor analysis
 // ============================================
+app.post('/api/research/competitor', async (req, res) => {
+    const { competitorDomain, clientDomain, niche } = req.body;
+    if (!competitorDomain || !clientDomain) return res.status(400).json({ error: 'Missing domains' });
+
+    try {
+        console.log(`[BTA] Lazy deep research for: ${competitorDomain}`);
+        const data = await perplexityCompetitorDeepResearch(competitorDomain, clientDomain, niche || 'software');
+        const normalized = normalizeAiData(data);
+        res.json({ status: 'success', domain: competitorDomain, data: normalized });
+    } catch (error) {
+        console.error(`[BTA] Deep research error for ${competitorDomain}:`, error.message);
+        res.status(500).json({ error: 'Deep research failed', details: error.message });
+    }
+});
 app.post('/api/blogs', async (req, res) => {
     const { domain, limit = 20 } = req.body;
     if (!domain) return res.status(400).json({ error: 'Domain is required' });

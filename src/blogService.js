@@ -618,10 +618,17 @@ async function getBlogPosts(domain, limit = 10) {
 
     let posts = [];
 
-    // Perplexity web search (sonar-pro) — only reliable method
-    console.log("[Blog] Using Perplexity sonar-pro to find blog posts...");
-    posts = await findBlogsWithPerplexity(domain, limit);
-    console.log(`[Blog] Perplexity found ${posts.length} blog posts`);
+    // PRIORITY 1: Direct Scraping (sitemaps + listing pages)
+    console.log("[Blog] Priority 1: Direct Scraping...");
+    posts = await findBlogsFromScraping(domain, limit);
+    console.log(`[Blog] Scraping found ${posts.length} blog posts`);
+
+    // PRIORITY 2: Perplexity (fallback)
+    if (posts.length < limit) {
+        console.log("[Blog] Priority 2: Using Perplexity fallback...");
+        const perplexityPosts = await findBlogsWithPerplexity(domain, limit - posts.length);
+        posts = [...posts, ...perplexityPosts];
+    }
 
     // Verify URLs exist
     if (posts.length > 0) {

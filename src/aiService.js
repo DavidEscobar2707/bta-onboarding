@@ -109,26 +109,16 @@ async function generateFullResearch(domain) {
     console.log(`[AI] ═══ Starting research for: ${domain} ═══`);
     console.log("[AI] Strategy: Gemini (company + competitors) | Perplexity (blogs + deep research)");
 
-    // ─── PHASE 1: Gemini company research + Perplexity blogs (parallel) ───
-    console.log("[AI] Phase 1: Company research (Gemini) + Blog discovery (Perplexity) in parallel...");
-    const [companyResult, blogResult] = await Promise.allSettled([
-        geminiCompanyResearch(domain),
-        findBlogsWithPerplexity(domain, 20),
-    ]);
+    // ─── PHASE 1: Gemini company research ───
+    console.log("[AI] Phase 1: Company research (Gemini)...");
+    const companyData = await geminiCompanyResearch(domain);
 
-    const companyData = companyResult.status === "fulfilled" ? companyResult.value : null;
     if (!companyData) {
-        const msg = companyResult.reason?.message || "unknown error";
-        console.error(`[AI] Company research FAILED: ${msg}`);
-        throw new Error(`Company research failed: ${msg}`);
+        throw new Error("Company research failed");
     }
 
-    let blogPosts = blogResult.status === "fulfilled" ? (blogResult.value || []) : [];
-    if (blogResult.status === "rejected") {
-        console.warn(`[AI] Blog discovery failed: ${blogResult.reason?.message}`);
-    }
-
-    console.log(`[AI] Phase 1 complete: company="${companyData.name}", blogs=${blogPosts.length}`);
+    const blogPosts = [];
+    console.log(`[AI] Phase 1 complete: company="${companyData.name}"`);
 
     // ─── PHASE 2: Gemini competitor discovery (needs niche from Phase 1) ───
     const niche = companyData.niche || `${companyData.industry || "technology"} software`;
@@ -143,31 +133,10 @@ async function generateFullResearch(domain) {
         console.error(`[AI] Competitor discovery failed: ${e.message}`);
     }
 
-    // ─── PHASE 3: Perplexity deep research on each competitor (parallel) ───
+    // ─── PHASE 3: Perplexity deep research (REMOVED from initial load) ───
+    // We now do this lazily/sequentially from the client side to avoid timeouts.
     const competitorDetails = {};
-    if (competitors.length > 0) {
-        console.log(`[AI] Phase 3: Deep research on ${competitors.length} competitors (Perplexity, parallel)...`);
-
-        const detailResults = await Promise.allSettled(
-            competitors.map(comp =>
-                perplexityCompetitorDeepResearch(comp.domain, domain, niche)
-                    .then(data => ({ domain: comp.domain, data, success: true }))
-                    .catch(err => {
-                        console.error(`[AI] Deep research failed for ${comp.domain}: ${err.message}`);
-                        return { domain: comp.domain, data: null, success: false };
-                    })
-            )
-        );
-
-        for (const result of detailResults) {
-            const val = result.status === "fulfilled" ? result.value : null;
-            if (val?.success && val.data) {
-                competitorDetails[val.domain] = val.data;
-            }
-        }
-
-        console.log(`[AI] Phase 3 complete: ${Object.keys(competitorDetails).length}/${competitors.length} competitors researched`);
-    }
+    console.log(`[AI] Phase 3: Deep research skipped (will be done lazily). Found ${competitors.length} competitors.`);
 
     console.log(`[AI] ═══ Research complete: company + ${blogPosts.length} blogs + ${competitors.length} competitors (${Object.keys(competitorDetails).length} detailed) ═══`);
     console.log(`[AI] Gemini calls used: 2 | Perplexity calls: ${1 + Object.keys(competitorDetails).length}`);
@@ -180,4 +149,7 @@ async function generateFullResearch(domain) {
     };
 }
 
-module.exports = { generateFullResearch };
+module.exports = {
+    generateFullResearch,
+    perplexityCompetitorDeepResearch
+};
