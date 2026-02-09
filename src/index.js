@@ -3,7 +3,6 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const { generateFullResearch } = require('./aiService');
 const { getBlogPosts } = require('./blogService');
-const { geminiBlogDiscovery } = require('./geminiService');
 const { submitToAirtable, getClientsFromAirtable } = require('./airtableService');
 const { submitToNotion } = require('./notionService');
 require('dotenv').config();
@@ -118,22 +117,7 @@ app.post('/api/blogs', async (req, res) => {
 
     try {
         console.log(`[BTA] Finding blog posts for: ${domain}`);
-
-        // Try Gemini first
-        let blogPosts = [];
-        try {
-            const geminiResult = await geminiBlogDiscovery(domain);
-            blogPosts = geminiResult?.blogPosts || [];
-            console.log(`[BTA] Gemini found ${blogPosts.length} blogs`);
-        } catch (e) {
-            console.log(`[BTA] Gemini blog search failed: ${e.message}, trying Perplexity fallback...`);
-        }
-
-        // Perplexity fallback
-        if (blogPosts.length === 0) {
-            blogPosts = await getBlogPosts(domain, limit);
-        }
-
+        const blogPosts = await getBlogPosts(domain, limit);
         res.json({ domain, status: 'success', count: blogPosts.length, blogPosts });
     } catch (error) {
         console.error('[BTA] Blog error:', error.message);
