@@ -239,12 +239,21 @@ function mergeResearchResults(results) {
             }
         }
 
-        // For arrays, combine unique items
+        // For arrays, combine unique items (handle both flat arrays and non-arrays)
         const arrayFields = ['features', 'integrations', 'compliance', 'techStack', 'limitations', 'blogTopics'];
         for (const field of arrayFields) {
-            const existing = merged[field] || [];
-            const newItems = result[field] || [];
-            const combined = [...new Set([...existing, ...newItems])];
+            const existing = Array.isArray(merged[field]) ? merged[field] : [];
+            const newItems = Array.isArray(result[field]) ? result[field] : [];
+
+            // Handle mixed formats: flatten if items are objects with 'items' property
+            const flatExisting = existing.flatMap(item =>
+                item && typeof item === 'object' && item.items ? item.items : [item]
+            );
+            const flatNew = newItems.flatMap(item =>
+                item && typeof item === 'object' && item.items ? item.items : [item]
+            );
+
+            const combined = [...new Set([...flatExisting, ...flatNew].filter(Boolean))];
             merged[field] = combined;
         }
 
