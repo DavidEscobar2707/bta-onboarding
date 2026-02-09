@@ -329,7 +329,7 @@ async function tryPerplexity(domain) {
     }
 
     const result = parseJson(responseText);
-    console.log(`[AI] Perplexity succeeded! Company: "${result.name}" | Niche: "${result.niche}"`);
+    console.log(`[AI] Perplexity succeeded! Company: "${result.name}" | Niche: "${result.niche}" | Features: ${result.features?.length || 0} | Competitors: ${result.competitors?.length || 0}`);
 
     return result;
 }

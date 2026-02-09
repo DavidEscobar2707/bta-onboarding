@@ -89,6 +89,8 @@ app.post('/api/onboard', async (req, res) => {
         const normalized = normalizeAiData(aiData);
         const name = normalized.name || domain.replace(/\.(com|io|net|org).*/, '');
 
+        console.log(`[BTA] Research complete for ${domain}: about=${!!normalized.about}, features=${normalized.features?.length || 0}, competitors=${normalized.competitors?.length || 0}, pricing=${normalized.pricing?.length || 0}`);
+
         res.json({
             domain,
             name: name.charAt(0).toUpperCase() + name.slice(1),
