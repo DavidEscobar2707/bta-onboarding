@@ -5,7 +5,7 @@ const Anthropic = require('@anthropic-ai/sdk');
  * Uses more context and asks for detailed competitive analysis
  */
 function getDeepResearchPrompt(domain) {
-    return `You are a competitive intelligence analyst. Research https://${domain} exhaustively using web search.
+  return `You are a competitive intelligence analyst. Research https://${domain} exhaustively using web search.
 
 RESEARCH PROCESS:
 1. Visit the website and search "${domain}", "${domain} about", "${domain} how it works"
@@ -99,44 +99,44 @@ Return ONLY valid JSON:
  * Parse JSON from Claude response
  */
 function parseJson(text) {
-    const cleaned = text.replace(/```json|```/g, "").trim();
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("No JSON found in response");
-    return JSON.parse(match[0]);
+  const cleaned = text.replace(/```json|```/g, "").trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON found in response");
+  return JSON.parse(match[0]);
 }
 
 /**
  * Research a domain using Claude OPUS for maximum detail
  */
 async function tryClaudeOpus(domain) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-        console.log("[AI] No ANTHROPIC_API_KEY, skipping Claude OPUS");
-        return null;
-    }
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.log("[AI] No ANTHROPIC_API_KEY, skipping Claude OPUS");
+    return null;
+  }
 
-    console.log("[AI] Trying Claude OPUS for deep research...");
-    const client = new Anthropic({ apiKey });
+  console.log("[AI] Trying Claude OPUS for deep research...");
+  const client = new Anthropic({ apiKey });
 
-    const message = await client.messages.create({
-        model: "claude-3-5-sonnet-20241022",
-        max_tokens: 8000,
-        messages: [
-            {
-                role: "user",
-                content: getDeepResearchPrompt(domain)
-            }
-        ]
-    });
+  const message = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 8000,
+    messages: [
+      {
+        role: "user",
+        content: getDeepResearchPrompt(domain)
+      }
+    ]
+  });
 
-    const responseText = message.content[0].text;
-    const result = parseJson(responseText);
+  const responseText = message.content[0].text;
+  const result = parseJson(responseText);
 
-    console.log(`[AI] Claude OPUS succeeded! Company: "${result.name}" | Niche: "${result.niche}"`);
-    console.log(`[AI] Claude found ${result.competitors?.length || 0} competitors`);
-    console.log(`[AI] Tokens used: ${message.usage?.input_tokens || 0} in, ${message.usage?.output_tokens || 0} out`);
+  console.log(`[AI] Claude OPUS succeeded! Company: "${result.name}" | Niche: "${result.niche}"`);
+  console.log(`[AI] Claude found ${result.competitors?.length || 0} competitors`);
+  console.log(`[AI] Tokens used: ${message.usage?.input_tokens || 0} in, ${message.usage?.output_tokens || 0} out`);
 
-    return result;
+  return result;
 }
 
 module.exports = { tryClaudeOpus, getDeepResearchPrompt };

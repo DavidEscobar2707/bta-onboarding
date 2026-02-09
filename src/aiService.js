@@ -306,7 +306,16 @@ async function tryGemini(domain) {
         },
     });
 
-    const result = parseJson(response.text);
+    // Extract text from response - handle different response structures
+    const responseText = response.text ||
+        response.candidates?.[0]?.content?.parts?.[0]?.text ||
+        response.response?.text?.();
+
+    if (!responseText) {
+        throw new Error("No text in Gemini response");
+    }
+
+    const result = parseJson(responseText);
     console.log(`[AI] Gemini succeeded! Company: "${result.name}" | Niche: "${result.niche}"`);
 
     const metadata = response.candidates?.[0]?.groundingMetadata;
