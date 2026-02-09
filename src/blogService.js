@@ -55,13 +55,32 @@ function isValidBlogUrl(url) {
             }
         }
 
-        // Must have a path deeper than just /blog/
         const segments = pathname.split('/').filter(Boolean);
-        if (segments.length < 2) return false;
+        if (segments.length === 0) return false;
 
-        // Should have a slug-like pattern (words with dashes)
         const lastSegment = segments[segments.length - 1];
-        if (lastSegment.includes('-') || lastSegment.length > 15) {
+
+        // If path contains blog/article/post indicator, be more lenient
+        const blogIndicators = ['blog', 'post', 'posts', 'article', 'articles', 'news', 'insights', 'resources'];
+        const hasBlogIndicator = segments.some(s => blogIndicators.includes(s.toLowerCase()));
+
+        // If we have a blog indicator and at least one more segment, accept it
+        if (hasBlogIndicator && segments.length >= 2) {
+            // Last segment should look like a slug (has dash, underscore, or >10 chars)
+            if (lastSegment.includes('-') || lastSegment.includes('_') || lastSegment.length > 10) {
+                return true;
+            }
+        }
+
+        // For URLs with 2+ segments, accept if last segment looks like content slug
+        if (segments.length >= 2) {
+            if (lastSegment.includes('-') || lastSegment.length > 15) {
+                return true;
+            }
+        }
+
+        // Accept any path with a meaningful slug (contains dash and is reasonably long)
+        if (lastSegment.includes('-') && lastSegment.length > 8) {
             return true;
         }
 
@@ -368,31 +387,68 @@ async function findBlogsFromScraping(domain, limit = 10) {
         }
     }
 
-    // If still no URLs, try sitemap as last resort but filter carefully
-    if (urls.size === 0) {
-        console.log("[Blog] Trying sitemaps as last resort...");
-        const sitemapPaths = ["/post-sitemap.xml", "/blog-sitemap.xml"];
+    // Try sitemaps - this is actually more reliable than scraping
+    if (urls.size < limit) {
+        console.log("[Blog] Trying sitemaps for blog URLs...");
+        const sitemapPaths = [
+            "/sitemap.xml",           // Main sitemap (often has index to other sitemaps)
+            "/sitemap_index.xml",     // Alternative index
+            "/post-sitemap.xml",      // WordPress post sitemap
+            "/blog-sitemap.xml",      // Custom blog sitemap
+            "/pages-sitemap.xml"      // Sometimes blogs are in pages
+        ];
 
         for (const path of sitemapPaths) {
             try {
                 const { data } = await axios.get(`https://${domain}${path}`, {
                     timeout: 8000,
-                    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BTABot/1.0)' }
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
                 });
 
+                // Check if this is a sitemap index (contains other sitemaps)
+                const sitemapRefs = data.match(/<loc>(https?:\/\/[^<]+sitemap[^<]*\.xml)<\/loc>/gi) || [];
+
+                // If it's an index, fetch the child sitemaps too
+                for (const ref of sitemapRefs.slice(0, 3)) { // Limit to 3 child sitemaps
+                    const childUrl = ref.replace(/<\/?loc>/gi, "");
+                    if (childUrl.includes('blog') || childUrl.includes('post')) {
+                        try {
+                            console.log(`[Blog] Fetching child sitemap: ${childUrl}`);
+                            const childRes = await axios.get(childUrl, { timeout: 8000 });
+                            const childMatches = childRes.data.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
+                            for (const m of childMatches) {
+                                const url = m.replace(/<\/?loc>/gi, "");
+                                if (isValidBlogUrl(url)) {
+                                    urls.add(url);
+                                }
+                            }
+                        } catch { }
+                    }
+                }
+
+                // Also check direct URLs in this sitemap
                 const matches = data.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
                 for (const m of matches) {
                     const url = m.replace(/<\/?loc>/gi, "");
+                    // Skip sitemap references themselves
+                    if (url.endsWith('.xml')) continue;
+                    // Use our validation to check if it's a blog-like URL
                     if (isValidBlogUrl(url)) {
                         urls.add(url);
                     }
                 }
 
-                if (urls.size > 0) {
+                if (urls.size >= limit) {
                     console.log(`[Blog] Sitemap found ${urls.size} valid URLs`);
                     break;
                 }
-            } catch { }
+            } catch (err) {
+                // Silently continue to next sitemap
+            }
+        }
+
+        if (urls.size > 0) {
+            console.log(`[Blog] Sitemaps found total of ${urls.size} valid URLs`);
         }
     }
 
@@ -443,20 +499,27 @@ async function getBlogPosts(domain, limit = 10) {
 
     let posts = [];
 
-    // Try OpenAI with web search first
-    posts = await findBlogsWithOpenAI(domain, limit);
+    // STRATEGY 1: Direct scraping + Sitemap (most reliable)
+    // This actually crawls the site and finds real URLs
+    console.log("[Blog] Step 1: Crawling site and sitemaps for blog URLs...");
+    posts = await findBlogsFromScraping(domain, limit);
+    console.log(`[Blog] Scraping found ${posts.length} blog posts`);
 
-    // Fallback to scraping if AI failed or found too few
-    if (posts.length < 3) {
-        console.log("[Blog] OpenAI found too few, trying fallback scraping...");
-        const scrapedPosts = await findBlogsFromScraping(domain, limit);
+    // STRATEGY 2: OpenAI web search (fallback for additional posts)
+    // Only if we found too few posts from scraping
+    if (posts.length < 5) {
+        console.log("[Blog] Step 2: Trying OpenAI web search to find more posts...");
+        const aiPosts = await findBlogsWithOpenAI(domain, limit);
 
-        // Merge, avoiding duplicates
-        const existingUrls = new Set(posts.map(p => p.url));
-        for (const post of scrapedPosts) {
-            if (!existingUrls.has(post.url)) {
-                posts.push(post);
+        if (aiPosts.length > 0) {
+            // Merge, avoiding duplicates
+            const existingUrls = new Set(posts.map(p => p.url));
+            for (const post of aiPosts) {
+                if (!existingUrls.has(post.url)) {
+                    posts.push(post);
+                }
             }
+            console.log(`[Blog] After OpenAI merge: ${posts.length} total posts`);
         }
     }
 
