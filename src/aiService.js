@@ -304,14 +304,15 @@ async function tryGemini(domain) {
         return null;
     }
 
-    console.log("[AI] Trying Gemini 2.5 Flash with Google Search + URL Context...");
+    console.log("[AI] Trying Gemini 2.5 Flash with Google Search...");
     const ai = new GoogleGenAI({ apiKey });
 
     const response = await ai.models.generateContent({
         model: "gemini-2.5-flash",
         contents: getPrompt(domain),
         config: {
-            tools: [{ googleSearch: {} }, { urlContext: {} }],
+            // urlContext removed - has 20 URL limit that conflicts with detailed prompt
+            tools: [{ googleSearch: {} }],
         },
     });
 
