@@ -38,6 +38,41 @@ const EXCLUDED_PATTERNS = [
     /\/search/i,
     /\/login/i,
     /\/signup/i,
+    // Non-blog content pages
+    /\/product\//i,
+    /\/products\//i,
+    /\/landing\//i,
+    /\/partnerships?\//i,
+    /\/pricing/i,
+    /\/contact/i,
+    /\/about/i,
+    /\/terms/i,
+    /\/privacy/i,
+    /\/legal/i,
+    /\/careers/i,
+    /\/jobs/i,
+    /\/demo/i,
+    /\/api\//i,
+    /\/docs\//i,
+    /\/help\//i,
+    /\/support\//i,
+    /\/features?\//i,
+    /\/solutions?\//i,
+    /\/platforms?\//i,
+    /\/integrations?\//i,
+    /\/customers?\//i,
+    /\/testimonials/i,
+    /\/case-stud/i,
+    /\/download/i,
+    /\/trial/i,
+    /\/get-started/i,
+    /\/book-a-/i,
+    /\/schedule/i,
+    /\/request/i,
+    /\/comparison/i,
+    /\/vs\//i,
+    /\/roi/i,
+    /\/webinar/i,
     /\/register/i,
     /\/cart/i,
     /\/checkout/i,
@@ -303,30 +338,40 @@ async function findBlogsWithPerplexity(domain, limit = 10) {
         console.log(`[Blog] Using Perplexity web search to find top ${limit} blogs for ${domain}...`);
 
         const response = await client.chat.completions.create({
-            model: "sonar",
+            model: "sonar-pro",
             messages: [
                 {
                     role: "system",
-                    content: "You are a blog discovery assistant. Search the web and return ONLY valid JSON. No markdown wrapping."
+                    content: "You are a blog discovery assistant. Search the web thoroughly and return ONLY valid JSON. No markdown wrapping."
                 },
                 {
                     role: "user",
-                    content: `Find up to ${limit} REAL blog posts or articles published on ${domain}.
+                    content: `Find up to ${limit} REAL blog posts, articles, or educational content published on ${domain}.
 
-Search for: site:${domain}/blog OR site:${domain}/resources OR site:${domain}/insights
+Search strategy (try ALL of these):
+1. site:${domain} blog
+2. site:${domain} article
+3. site:${domain}/blog
+4. site:${domain}/resources
+5. site:${domain}/insights
+6. site:${domain}/guides
+7. site:${domain}/learn
+8. site:${domain}/news
+9. "${domain}" blog post
 
-IMPORTANT:
-- Return ONLY actual article/blog post URLs (not category pages, tag pages, or sitemaps)
-- URLs should be individual articles with slugs like "/blog/article-name"
-- Do NOT include URLs ending in /blog/, /resources/, /category/, /tag/, /author/
-- Only return posts that ACTUALLY EXIST. If the site has 3 blog posts, return 3 — do NOT invent URLs to fill a quota.
+IMPORTANT RULES:
+- Return ONLY actual article/blog/guide URLs with real written content
+- URLs must be individual content pages with slugs like "/blog/article-name" or "/guides/topic-name"
+- Do NOT include: product pages (/product/), landing pages (/landing/), pricing pages, demo pages, homepage, about pages, partnership pages, contact pages
+- Only return posts that ACTUALLY EXIST. If the site has 3 blog posts, return 3 — do NOT invent URLs.
+- If the site has NO blog or articles section at all, return an empty array.
 
 For each REAL article found:
-- The exact full URL
+- The exact full URL (must be on ${domain})
 - The article title
 - A brief description of what the article is about
 
-Respond with JSON:
+Respond with JSON only:
 {
     "blogPosts": [
         {
@@ -337,7 +382,7 @@ Respond with JSON:
     ]
 }
 
-If no blog posts found, return: {"blogPosts": []}`
+If no blog posts or articles found, return: {"blogPosts": []}`
                 }
             ],
         });
@@ -515,7 +560,20 @@ async function findBlogsFromScraping(domain, limit = 10) {
 
     console.log(`[Blog] Total valid blog URLs found: ${urls.size}`);
 
-    return [...urls].slice(0, limit).map((url, i) => ({
+    // Prioritize URLs that contain blog indicators in the path
+    const blogIndicators = ['blog', 'article', 'articles', 'post', 'posts', 'news', 'insights', 'resources', 'guides', 'learn'];
+    const allUrls = [...urls];
+    allUrls.sort((a, b) => {
+        const aSegments = new URL(a).pathname.split('/').filter(Boolean);
+        const bSegments = new URL(b).pathname.split('/').filter(Boolean);
+        const aHasBlog = aSegments.some(s => blogIndicators.includes(s.toLowerCase()));
+        const bHasBlog = bSegments.some(s => blogIndicators.includes(s.toLowerCase()));
+        if (aHasBlog && !bHasBlog) return -1;
+        if (!aHasBlog && bHasBlog) return 1;
+        return 0;
+    });
+
+    return allUrls.slice(0, limit).map((url, i) => ({
         id: i + 1,
         url,
         title: safeDecodeSlug(url),
@@ -560,29 +618,10 @@ async function getBlogPosts(domain, limit = 10) {
 
     let posts = [];
 
-    // STRATEGY 1: Perplexity web search (primary - finds real blog posts)
-    console.log("[Blog] Step 1: Using Perplexity to find blog posts...");
+    // Perplexity web search (sonar-pro) — only reliable method
+    console.log("[Blog] Using Perplexity sonar-pro to find blog posts...");
     posts = await findBlogsWithPerplexity(domain, limit);
     console.log(`[Blog] Perplexity found ${posts.length} blog posts`);
-
-    // STRATEGY 2: Direct scraping + Sitemap (fallback for additional posts)
-    // Only if Perplexity found too few posts
-    if (posts.length < 8) {
-        console.log("[Blog] Step 2: Crawling site and sitemaps for more blog URLs...");
-        const scrapedPosts = await findBlogsFromScraping(domain, limit);
-
-        if (scrapedPosts.length > 0) {
-            // Merge, avoiding duplicates (use normalized URLs for comparison)
-            const existingUrls = new Set(posts.map(p => normalizeUrl(p.url)));
-            for (const post of scrapedPosts) {
-                if (!existingUrls.has(normalizeUrl(post.url))) {
-                    existingUrls.add(normalizeUrl(post.url));
-                    posts.push(post);
-                }
-            }
-            console.log(`[Blog] After scraping merge: ${posts.length} total posts`);
-        }
-    }
 
     // Verify URLs exist
     if (posts.length > 0) {
