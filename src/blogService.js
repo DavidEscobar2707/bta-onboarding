@@ -2,6 +2,15 @@ const OpenAI = require("openai");
 const axios = require("axios");
 const cheerio = require("cheerio");
 
+// Perplexity client (OpenAI-compatible)
+function getPerplexityClient() {
+    if (!process.env.PERPLEXITY_API_KEY) return null;
+    return new OpenAI({
+        apiKey: process.env.PERPLEXITY_API_KEY,
+        baseURL: "https://api.perplexity.ai",
+    });
+}
+
 // ============================================
 // AI-POWERED BLOG DISCOVERY + FULL CONTENT SCRAPING
 // Finds top 10 most popular/recent blogs and scrapes full content
@@ -270,26 +279,32 @@ async function scrapeFullBlogContent(url) {
 }
 
 // ============================================
-// STRATEGY 1: OpenAI with Web Search - Find TOP 10 popular/recent
+// STRATEGY 1: Perplexity with Web Search - Find TOP 10 popular/recent
 // ============================================
-async function findBlogsWithOpenAI(domain, limit = 10) {
-    if (!process.env.OPENAI_API_KEY) {
-        console.log("[Blog] No OPENAI_API_KEY, skipping OpenAI");
+async function findBlogsWithPerplexity(domain, limit = 10) {
+    const client = getPerplexityClient();
+    if (!client) {
+        console.log("[Blog] No PERPLEXITY_API_KEY, skipping Perplexity");
         return [];
     }
 
     try {
-        console.log(`[Blog] Using OpenAI web search to find top ${limit} blogs for ${domain}...`);
-        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        console.log(`[Blog] Using Perplexity web search to find top ${limit} blogs for ${domain}...`);
 
-        const response = await openai.responses.create({
-            model: "gpt-4o",
-            tools: [{ type: "web_search" }],
-            input: `Find ${limit} REAL blog posts or articles published on ${domain}.
+        const response = await client.chat.completions.create({
+            model: "sonar",
+            messages: [
+                {
+                    role: "system",
+                    content: "You are a blog discovery assistant. Search the web and return ONLY valid JSON. No markdown wrapping."
+                },
+                {
+                    role: "user",
+                    content: `Find ${limit} REAL blog posts or articles published on ${domain}.
 
 Search for: site:${domain}/blog OR site:${domain}/resources OR site:${domain}/insights
 
-IMPORTANT: 
+IMPORTANT:
 - Return ONLY actual article/blog post URLs (not category pages, tag pages, or sitemaps)
 - URLs should be individual articles with slugs like "/blog/article-name"
 - Do NOT include URLs ending in /blog/, /resources/, /category/, /tag/, /author/
@@ -311,16 +326,18 @@ Respond with JSON:
 }
 
 If no blog posts found, return: {"blogPosts": []}`
+                }
+            ],
         });
 
-        const content = response.output_text || "";
-        console.log(`[Blog] OpenAI response received`);
+        const content = response.choices?.[0]?.message?.content || "";
+        console.log(`[Blog] Perplexity response received`);
 
         const parsed = extractJson(content);
         if (parsed?.blogPosts?.length > 0) {
             // Filter valid URLs
             const validPosts = parsed.blogPosts.filter(p => isValidBlogUrl(p.url));
-            console.log(`[Blog] OpenAI found ${validPosts.length} valid blog posts (filtered from ${parsed.blogPosts.length})`);
+            console.log(`[Blog] Perplexity found ${validPosts.length} valid blog posts (filtered from ${parsed.blogPosts.length})`);
 
             return validPosts.slice(0, limit).map((p, i) => ({
                 id: i + 1,
@@ -333,10 +350,10 @@ If no blog posts found, return: {"blogPosts": []}`
             }));
         }
 
-        console.log("[Blog] OpenAI found no blogs");
+        console.log("[Blog] Perplexity found no blogs");
         return [];
     } catch (error) {
-        console.log(`[Blog] OpenAI failed: ${error.message}`);
+        console.log(`[Blog] Perplexity failed: ${error.message}`);
         return [];
     }
 }
@@ -537,11 +554,11 @@ async function getBlogPosts(domain, limit = 10) {
     posts = await findBlogsFromScraping(domain, limit);
     console.log(`[Blog] Scraping found ${posts.length} blog posts`);
 
-    // STRATEGY 2: OpenAI web search (fallback for additional posts)
+    // STRATEGY 2: Perplexity web search (fallback for additional posts)
     // Only if we found too few posts from scraping
     if (posts.length < 8) {
-        console.log("[Blog] Step 2: Trying OpenAI web search to find more posts...");
-        const aiPosts = await findBlogsWithOpenAI(domain, limit);
+        console.log("[Blog] Step 2: Trying Perplexity web search to find more posts...");
+        const aiPosts = await findBlogsWithPerplexity(domain, limit);
 
         if (aiPosts.length > 0) {
             // Merge, avoiding duplicates (use normalized URLs for comparison)
@@ -552,7 +569,7 @@ async function getBlogPosts(domain, limit = 10) {
                     posts.push(post);
                 }
             }
-            console.log(`[Blog] After OpenAI merge: ${posts.length} total posts`);
+            console.log(`[Blog] After Perplexity merge: ${posts.length} total posts`);
         }
     }
 

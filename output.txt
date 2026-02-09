@@ -1,0 +1,58 @@
+﻿[dotenv@17.2.3] injecting env (11) from .env -- tip: ÔÜÖ´©Å  specify custom .env file path with { path: '/custom/path/.env' }
+Testing blog fetching for goliathdata.com...
+[Blog] ÔòÉÔòÉÔòÉ Finding TOP 10 blog posts for: goliathdata.com ÔòÉÔòÉÔòÉ
+[Blog] Step 1: Crawling site and sitemaps for blog URLs...
+[Blog] Fallback: Scraping goliathdata.com for blog URLs...
+[Blog] Trying goliathdata.com/blog...
+[Blog] Trying goliathdata.com/resources...
+[Blog] Could not access goliathdata.com/resources: Request failed with status code 404
+[Blog] Trying goliathdata.com/insights...
+[Blog] Could not access goliathdata.com/insights: Request failed with status code 404
+[Blog] Trying goliathdata.com/news...
+[Blog] Could not access goliathdata.com/news: Request failed with status code 404
+[Blog] Trying goliathdata.com/articles...
+[Blog] Could not access goliathdata.com/articles: Request failed with status code 404
+[Blog] Trying goliathdata.com/posts...
+[Blog] Could not access goliathdata.com/posts: Request failed with status code 404
+[Blog] Trying sitemaps for blog URLs...
+[Blog] Sitemap found 9703 valid URLs
+[Blog] Sitemaps found total of 9703 valid URLs
+[Blog] Total valid blog URLs found: 9703
+[Blog] Scraping found 10 blog posts
+[Blog] Verifying 10 URLs...
+[Blog] Verified 10/10 URLs
+[Blog] Scraping full content for 10 posts...
+[Blog] Scraping full content: https://goliathdata.com/product/data-pipelines
+[Blog] Scraped 1811 chars, 264 words from https://goliathdata.com/product/data-pipelines
+[Blog] Scraping full content: https://goliathdata.com/product/command-center
+[Blog] Scraped 1895 chars, 303 words from https://goliathdata.com/product/command-center
+[Blog] Scraping full content: https://goliathdata.com/landing/deal-speed/
+[Blog] Scraped 2730 chars, 453 words from https://goliathdata.com/landing/deal-speed/
+[Blog] Scraping full content: https://goliathdata.com/partnerships/dario-darnandez
+[Blog] Scraped 11107 chars, 1764 words from https://goliathdata.com/partnerships/dario-darnandez
+[Blog] Scraping full content: https://goliathdata.com/partnerships/nc-off-market-page
+[Blog] Scraped 11107 chars, 1764 words from https://goliathdata.com/partnerships/nc-off-market-page
+[Blog] Scraping full content: https://goliathdata.com/landing/higher-close-rate/
+[Blog] Scraped 614 chars, 99 words from https://goliathdata.com/landing/higher-close-rate/
+[Blog] Scraping full content: https://goliathdata.com/landing/save-1200/
+[Blog] Scraped 614 chars, 99 words from https://goliathdata.com/landing/save-1200/
+[Blog] Scraping full content: https://goliathdata.com/landing/real-time-data/
+[Blog] Scraped 614 chars, 99 words from https://goliathdata.com/landing/real-time-data/
+[Blog] Scraping full content: https://goliathdata.com/landing/command-center/
+[Blog] Scraped 614 chars, 99 words from https://goliathdata.com/landing/command-center/
+[Blog] Scraping full content: https://goliathdata.com/landing/david-voice-ai-agent/
+[Blog] Scraped 614 chars, 99 words from https://goliathdata.com/landing/david-voice-ai-agent/
+[Blog] ÔòÉÔòÉÔòÉ Returning 10 blog posts with content ÔòÉÔòÉÔòÉ
+
+Found 10 posts.
+Ô£à No duplicates found.
+https://goliathdata.com/product/data-pipelines
+https://goliathdata.com/product/command-center
+https://goliathdata.com/landing/deal-speed/
+https://goliathdata.com/partnerships/dario-darnandez
+https://goliathdata.com/partnerships/nc-off-market-page
+https://goliathdata.com/landing/higher-close-rate/
+https://goliathdata.com/landing/save-1200/
+https://goliathdata.com/landing/real-time-data/
+https://goliathdata.com/landing/command-center/
+https://goliathdata.com/landing/david-voice-ai-agent/

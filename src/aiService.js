@@ -1,4 +1,3 @@
-const { GoogleGenAI } = require("@google/genai");
 const OpenAI = require("openai");
 const { tryClaudeOpus } = require("./anthropicService");
 
@@ -297,65 +296,41 @@ function mergeResearchResults(results) {
     return merged;
 }
 
-async function tryGemini(domain) {
-    const apiKey = process.env.GOOGLE_API_KEY;
+async function tryPerplexity(domain) {
+    const apiKey = process.env.PERPLEXITY_API_KEY;
     if (!apiKey) {
-        console.log("[AI] No GOOGLE_API_KEY, skipping Gemini");
+        console.log("[AI] No PERPLEXITY_API_KEY, skipping Perplexity");
         return null;
     }
 
-    console.log("[AI] Trying Gemini 2.5 Flash with Google Search...");
-    const ai = new GoogleGenAI({ apiKey });
-
-    const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: getPrompt(domain),
-        config: {
-            // urlContext removed - has 20 URL limit that conflicts with detailed prompt
-            tools: [{ googleSearch: {} }],
-        },
+    console.log("[AI] Trying Perplexity Sonar Pro with web search...");
+    const client = new OpenAI({
+        apiKey,
+        baseURL: "https://api.perplexity.ai",
     });
 
-    // Extract text from response - handle different response structures
-    const responseText = response.text ||
-        response.candidates?.[0]?.content?.parts?.[0]?.text ||
-        response.response?.text?.();
+    const response = await client.chat.completions.create({
+        model: "sonar-pro",
+        messages: [
+            {
+                role: "system",
+                content: "You are a senior market research analyst. You MUST use web search extensively. Every claim must be sourced from live search results. Return ONLY valid JSON."
+            },
+            {
+                role: "user",
+                content: getPrompt(domain)
+            }
+        ],
+    });
 
+    const responseText = response.choices?.[0]?.message?.content;
     if (!responseText) {
-        throw new Error("No text in Gemini response");
+        throw new Error("No text in Perplexity response");
     }
 
     const result = parseJson(responseText);
-    console.log(`[AI] Gemini succeeded! Company: "${result.name}" | Niche: "${result.niche}"`);
+    console.log(`[AI] Perplexity succeeded! Company: "${result.name}" | Niche: "${result.niche}"`);
 
-    const metadata = response.candidates?.[0]?.groundingMetadata;
-    if (metadata?.webSearchQueries) {
-        console.log("[AI] Search queries:", metadata.webSearchQueries);
-    }
-    if (metadata?.groundingChunks?.length > 0) {
-        console.log(`[AI] Grounded with ${metadata.groundingChunks.length} sources`);
-    }
-
-    return result;
-}
-
-async function tryOpenAI(domain) {
-    if (!process.env.OPENAI_API_KEY) {
-        console.log("[AI] No OPENAI_API_KEY, skipping OpenAI");
-        return null;
-    }
-
-    console.log("[AI] Trying OpenAI GPT-4o with web search...");
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-    const response = await openai.responses.create({
-        model: "gpt-4o",
-        tools: [{ type: "web_search" }],
-        input: getPrompt(domain),
-    });
-
-    const result = parseJson(response.output_text);
-    console.log(`[AI] OpenAI succeeded! Company: "${result.name}" | Niche: "${result.niche}"`);
     return result;
 }
 
@@ -369,32 +344,17 @@ async function generateClientData(domain) {
     const results = [];
     const errors = [];
 
-    // Try Gemini (fastest, has web search)
+    // Try Perplexity Sonar Pro (fast, has built-in web search)
     try {
-        const geminiResult = await tryGemini(domain);
-        if (geminiResult) {
-            results.push(geminiResult);
-            console.log("[AI] ✓ Gemini contributed data");
+        const perplexityResult = await tryPerplexity(domain);
+        if (perplexityResult) {
+            results.push(perplexityResult);
+            console.log("[AI] ✓ Perplexity contributed data");
         }
     } catch (error) {
-        console.error("[AI] ✗ Gemini failed:", error.message);
-        errors.push({ provider: 'Gemini', error: error.message });
+        console.error("[AI] ✗ Perplexity failed:", error.message);
+        errors.push({ provider: 'Perplexity', error: error.message });
     }
-
-    // OpenAI DISABLED - quota exceeded, using Gemini + Claude only
-    // To re-enable, uncomment the block below after adding billing
-    /*
-    try {
-        const openaiResult = await tryOpenAI(domain);
-        if (openaiResult) {
-            results.push(openaiResult);
-            console.log("[AI] ✓ OpenAI contributed data");
-        }
-    } catch (error) {
-        console.error("[AI] ✗ OpenAI failed:", error.message);
-        errors.push({ provider: 'OpenAI', error: error.message });
-    }
-    */
 
     // Try Claude OPUS (deepest analysis)
     try {
