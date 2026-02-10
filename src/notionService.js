@@ -8,8 +8,45 @@ const { Client } = require('@notionhq/client');
 /**
  * Helper: Create paragraph block with optional bold label
  */
+function normalizeNotionPageId(input) {
+    const raw = String(input || '').trim();
+    if (!raw) return null;
+
+    // Accept:
+    // - UUID with hyphens
+    // - 32-char hex id
+    // - Full Notion URL ending with page id
+    const fromUrl = raw.match(/([a-f0-9]{32})(?:\?|$)/i);
+    const compact = (fromUrl?.[1] || raw).replace(/-/g, '').toLowerCase();
+
+    if (!/^[a-f0-9]{32}$/.test(compact)) return null;
+    return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20)}`;
+}
+
+function chunkNotionText(input, max = 2000) {
+    const text = String(input || '');
+    if (!text) return [''];
+    const chunks = [];
+    for (let i = 0; i < text.length; i += max) {
+        chunks.push(text.slice(i, i + max));
+    }
+    return chunks;
+}
+
+function buildRichTextChunks(text, { link = null } = {}) {
+    const chunks = chunkNotionText(text, 2000);
+    return chunks.map((content, index) => ({
+        type: 'text',
+        text: {
+            content,
+            link: link && index === 0 ? { url: link } : null
+        }
+    }));
+}
+
 function paragraph(text, label = null) {
     if (label) {
+        const value = String(text || 'Not available');
         return {
             type: 'paragraph',
             paragraph: {
@@ -19,7 +56,7 @@ function paragraph(text, label = null) {
                         text: { content: `${label}: ` },
                         annotations: { bold: true }
                     },
-                    { text: { content: text || 'Not available' } }
+                    ...buildRichTextChunks(value)
                 ]
             }
         };
@@ -27,7 +64,7 @@ function paragraph(text, label = null) {
     return {
         type: 'paragraph',
         paragraph: {
-            rich_text: [{ text: { content: text || '' } }]
+            rich_text: buildRichTextChunks(text || '')
         }
     };
 }
@@ -52,9 +89,7 @@ function bullet(text, link = null) {
     return {
         type: 'bulleted_list_item',
         bulleted_list_item: {
-            rich_text: [{
-                text: { content: text || '', link: link ? { url: link } : null }
-            }]
+            rich_text: buildRichTextChunks(text || '', { link })
         }
     };
 }
@@ -66,7 +101,7 @@ function numbered(text) {
     return {
         type: 'numbered_list_item',
         numbered_list_item: {
-            rich_text: [{ text: { content: text || '' } }]
+            rich_text: buildRichTextChunks(text || '')
         }
     };
 }
@@ -109,11 +144,15 @@ function toggle(title, children) {
  */
 async function submitToNotion(data) {
     const notionKey = process.env.NOTION_API_KEY;
-    const parentPageId = process.env.NOTION_PARENT_PAGE_ID;
+    const parentPageIdRaw = process.env.NOTION_PARENT_PAGE_ID;
+    const parentPageId = normalizeNotionPageId(parentPageIdRaw);
 
-    if (!notionKey || !parentPageId) {
+    if (!notionKey || !parentPageIdRaw) {
         console.log('[Notion] Missing NOTION_API_KEY or NOTION_PARENT_PAGE_ID, skipping backup');
         return { skipped: true, reason: 'Not configured' };
+    }
+    if (!parentPageId) {
+        throw new Error('Invalid NOTION_PARENT_PAGE_ID format. Use a Notion page URL or page ID.');
     }
 
     const notion = new Client({ auth: notionKey });
@@ -625,6 +664,7 @@ async function submitToNotion(data) {
     try {
         console.log(`[Notion] Creating COMPLETE report for: ${companyName}`);
         console.log(`[Notion] Total blocks: ${children.length}`);
+        console.log(`[Notion] Using parent page: ${parentPageId}`);
 
         // Create as a standalone page under the parent page
         const response = await notion.pages.create({

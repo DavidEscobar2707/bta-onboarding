@@ -26,122 +26,7 @@ function buildJsonSchema(domain, mode, promptMode = 'master') {
   "confidence": "high | medium | low"
 }`;
     }
-
-    if (promptMode === 'competitor_enriched' && mode === 'competitor') {
-        return `{
-  "name": "Official Company Name",
-  "domain": "${domain}",
-  "about": "Company summary or null",
-  "niche": "Specific niche",
-  "usp": "Unique selling proposition or null",
-  "icp": "Ideal customer profile or null",
-  "features": ["Specific product features"],
-  "integrations": ["Known integrations"],
-  "pricing": [{"tier": "Name", "price": "$", "period": "/month"}],
-  "compliance": ["SOC 2", "GDPR", "HIPAA", "CCPA", "ISO 27001", "PCI DSS"],
-  "reviews": [{"platform": "G2|Capterra|Trustpilot|Glassdoor|Yelp|BBB", "score": "4.8", "count": "150", "summary": "Theme"}],
-  "caseStudies": [{"company": "Customer", "result": "Outcome", "industry": "Industry"}],
-  "limitations": ["Known limitations"],
-  "techStack": ["Known technologies"],
-  "funding": "Funding summary or null",
-  "teamSize": "Team size range or null",
-  "guarantees": "Guarantees or SLAs or null",
-  "roadmap": "Roadmap summary or null",
-  "segments": ["Customer segments"],
-  "contentThemes": ["Content themes"],
-  "partnerships": ["Partnerships"],
-  "changelog": "Product updates/changelog summary or null",
-  "contact": [{"label": "Sales Email", "value": "sales@domain.com", "type": "email"}],
-  "founders": [{"name": "Full name", "role": "Title", "background": "Brief background", "linkedin": "URL or null"}],
-  "social": {
-    "twitter": "URL or null",
-    "linkedin": "URL or null",
-    "facebook": "URL or null",
-    "instagram": "URL or null",
-    "threads": "URL or null",
-    "bluesky": "URL or null",
-    "tiktok": "URL or null"
-  },
-  "contentProfiles": {
-    "youtube": "URL or null",
-    "medium": "URL or null",
-    "substack": "URL or null",
-    "podcast": "URL or null",
-    "pinterest": "URL or null",
-    "dribbble": "URL or null"
-  },
-  "developerProfiles": {
-    "github": "URL or null",
-    "productHunt": "URL or null",
-    "discord": "URL or null",
-    "slackCommunity": "URL or null",
-    "reddit": "URL or null"
-  },
-  "reviewProfiles": {
-    "g2": "URL or null",
-    "capterra": "URL or null",
-    "trustpilot": "URL or null",
-    "glassdoor": "URL or null",
-    "yelp": "URL or null",
-    "bbb": "URL or null"
-  },
-  "businessProfiles": {
-    "crunchbase": "URL or null",
-    "wikipedia": "URL or null",
-    "googleBusiness": "URL or null",
-    "wellfound": "URL or null"
-  },
-  "appProfiles": {
-    "appStore": "URL or null",
-    "playStore": "URL or null"
-  },
-  "strengthVsTarget": "Where stronger vs target",
-  "weaknessVsTarget": "Where weaker vs target",
-  "pricingComparison": "Cheaper | Similar | More expensive | Unknown",
-  "marketPositionVsTarget": "Brief positioning comparison",
-  "confidence": "high | medium | low",
-  "confidenceNotes": "What was verified vs missing"
-}`;
-    }
-
-    if (promptMode === 'lite') {
-        if (mode === 'client') {
-            return `{
-  "name": "Official Company Name",
-  "domain": "${domain}",
-  "about": "Company summary or null",
-  "niche": "Specific niche: [approach] + [product] + [buyer]",
-  "usp": "Unique selling proposition or null",
-  "icp": "Ideal customer profile or null",
-  "features": ["Specific product features"],
-  "pricing": [{"tier": "Name", "price": "$", "period": "/month"}],
-  "integrations": ["Known integrations"],
-  "limitations": ["Verified limitations"],
-  "reviews": [{"platform": "G2|Capterra|Trustpilot", "score": "4.8", "count": "150", "summary": "Theme"}],
-  "competitors": [{"domain": "competitor.com", "name": "Name", "reason": "Same product + same buyer", "differentiator": "How they differ"}],
-  "confidence": "high | medium | low",
-  "confidenceNotes": "What was verified vs missing"
-}`;
-        }
-        return `{
-  "name": "Official Company Name",
-  "domain": "${domain}",
-  "about": "Company summary or null",
-  "niche": "Specific niche",
-  "usp": "Unique selling proposition or null",
-  "features": ["Specific product features"],
-  "pricing": [{"tier": "Name", "price": "$", "period": "/month"}],
-  "integrations": ["Known integrations"],
-  "limitations": ["Verified limitations"],
-  "strengthVsTarget": "Where stronger vs target",
-  "weaknessVsTarget": "Where weaker vs target",
-  "pricingComparison": "Cheaper | Similar | More expensive | Unknown",
-  "marketPositionVsTarget": "Brief positioning comparison",
-  "confidence": "high | medium | low",
-  "confidenceNotes": "What was verified vs missing"
-}`;
-    }
-
+    // Unified schema for both client and competitor.
     const base = `{
   "name": "Official Company Name",
   "domain": "${domain}",
@@ -155,6 +40,7 @@ function buildJsonSchema(domain, mode, promptMode = 'master') {
   "yearFounded": "YYYY or null",
   "headquarters": "City, State/Country or null",
   "teamSize": "e.g., '11-50', '51-200' or null",
+  "activeHours": "Typical support/engagement hours in local timezone or null",
   "funding": "e.g., '$15M Series A' or 'Bootstrapped' or null",
   "features": ["Specific verified product features — be detailed, not generic"],
   "integrations": ["Verified integrations with other tools/platforms"],
@@ -207,12 +93,10 @@ function buildJsonSchema(domain, mode, promptMode = 'master') {
   "limitations": ["Verified limitations or common complaints from real user feedback"],
   "commonObjections": ["Sales objections a real buyer might raise"],
   "blogTopics": ["5-10 recent blog themes that reveal their content/SEO strategy"],
+  "contentStrategy": "Brief description of content marketing approach or null",
   "segments": ["Customer segments they serve"],
   "contentThemes": ["Marketing/content themes"],
-  "partnerships": ["Known technology or business partnerships"],`;
-
-    if (mode === 'client') {
-        return base + `
+  "partnerships": ["Known technology or business partnerships"],
   "competitors": [
     {
       "domain": "competitor.com",
@@ -221,19 +105,16 @@ function buildJsonSchema(domain, mode, promptMode = 'master') {
       "differentiator": "How they differ (pricing, features, positioning)"
     }
   ],
-  "confidence": "high | medium | low",
-  "confidenceNotes": "Explain what you could and couldn't verify"
-}`;
-    } else {
-        return base + `
-  "strengthVsTarget": "Where this company is STRONGER than the target company (be specific)",
-  "weaknessVsTarget": "Where this company is WEAKER than the target company (be specific)",
+  "strengthVsTarget": "Where this company is STRONGER than the target company (be specific) or null",
+  "weaknessVsTarget": "Where this company is WEAKER than the target company (be specific) or null",
   "pricingComparison": "Cheaper | Similar | More expensive | Unknown",
-  "marketPositionVsTarget": "Brief positioning comparison",
+  "marketPositionVsTarget": "Brief positioning comparison or null",
   "confidence": "high | medium | low",
-  "confidenceNotes": "Explain what you could and couldn't verify"
+  "confidenceNotes": "Explain what you could and couldn't verify",
+  "searchesPerformed": ["Actual search queries executed for auditability"],
+  "researchDate": "YYYY-MM-DD"
 }`;
-    }
+    return base;
 }
 
 /**
@@ -274,32 +155,71 @@ Return ONLY valid JSON:
  * @param {object|null} structuralContext - Pre-scraped data from structuralScraper
  * @param {object|null} clientContext - For competitor mode: {name, domain, niche, usp}
  */
-function buildResearchPrompt(domain, mode, structuralContext, clientContext, promptMode = 'lite') {
-    // 3 STRATEGIC QUERIES - minimal but comprehensive
+function buildResearchPrompt(domain, mode, structuralContext, clientContext, promptMode = 'lite', enrichmentContext = null) {
     const isClient = mode === 'client';
-    const isLite = promptMode === 'lite';
     const isCompetitorEnriched = mode === 'competitor' && promptMode === 'competitor_enriched';
+    const isPostCallEnrichment = promptMode === 'postcall_enrichment';
     
-    let prompt = `You are a senior competitive intelligence analyst researching ${domain}.
+    let prompt = `${isClient ? `You are a senior market research analyst. Your task is to produce a comprehensive intelligence report on https://${domain}.` : `You are a competitive intelligence analyst. Research https://${domain} exhaustively.`}
 
-${isCompetitorEnriched ? 'You are in COMPETITOR_ENRICHED mode: maximize verified profile coverage in one pass. Return null/empty values for unknowns. Do not invent links.' : (isLite ? 'You are in LITE mode: prioritize speed and accuracy. Use concise extraction.' : 'You are in MASTER mode: prioritize depth and coverage.')}
+You MUST use web search extensively. Do NOT rely on model memory. Every claim should be verified with live sources or the company website.
+If something cannot be verified, use null or [].
+Never fabricate data.
 
-Run these strategic web searches and extract data:
+${isPostCallEnrichment
+            ? 'You are in POSTCALL_ENRICHMENT mode: prioritize filling missing fields using interview + blog context, without changing already-solid existing values.'
+            : (isCompetitorEnriched
+                ? 'You are in COMPETITOR_ENRICHED mode: maximize verified profile coverage in one pass.'
+                : 'You are in CORE mode: prioritize accuracy and specificity.')}
 
-QUERY 1: "${domain}" "${domain} features" "${domain} pricing"
-→ Company basics: name, what they do, product model, key features (with details), pricing tiers, target buyer
+PHASE 1 — COMPANY FOUNDATION
+1) Search "${domain}", "${domain} about", "${domain} what is", "${domain} company overview"
+2) Identify:
+   - What they sell (product type, delivery model)
+   - Who they sell to (buyer persona, company size, industry)
+   - USP and positioning
+   - Tone of voice and brand style
 
-QUERY 2: "${domain} competitors" "${domain} alternatives" "${domain} vs"
-→ Direct competitors only (same product type, same buyer). Return AT LEAST 5 when possible. If fewer than 5 truly qualify, return all valid ones.
-→ For each: domain, name, why they compete
-${!isClient && clientContext ? `→ Also search "${domain} vs ${clientContext.domain}" for comparison` : ''}
+PHASE 2 — COMMERCIAL DETAILS
+3) Search "${domain} pricing", "${domain} plans", "how much does ${domain} cost"
+4) Search "${domain} integrations", "${domain} API", "${domain} tech stack"
+5) Search "${domain} features", "${domain} product tour", "${domain} changelog"
 
-QUERY 3: "${domain} reviews" "${domain} G2" "${domain} problems"
-→ Review sentiment (positive/negative), key limitations/complaints, common objections
+PHASE 3 — CREDIBILITY & SOCIAL PROOF
+6) Search "${domain} reviews G2", "${domain} reviews Capterra", "${domain} Trustpilot"
+7) Search "${domain} case study", "${domain} customer stories", "${domain} testimonials"
+8) Search "${domain} SOC 2", "${domain} GDPR", "${domain} HIPAA", "${domain} security"
 
-${isCompetitorEnriched ? `QUERY 4: "${domain}" "twitter OR linkedin OR github OR product hunt OR crunchbase OR wikipedia OR app store OR play store"
-→ Collect public profile/directory URLs when verifiable (social, content, developer, reviews, business, app stores).` : ''}
+PHASE 4 — PEOPLE & BACKSTORY
+9) Search "${domain} founders", "${domain} leadership team", "${domain} Crunchbase"
+10) Search "${domain} funding", "${domain} Series", "${domain} investors"
+11) Search "${domain} blog", "${domain} content"
 
+PHASE 5 — CONTACT & SOCIAL PRESENCE
+12) Search "${domain} Twitter", "${domain} LinkedIn", "${domain} GitHub"
+13) Search "${domain} support", "${domain} contact", "${domain} help center"
+
+PHASE 6 — COMPETITOR IDENTIFICATION (STRICT)
+Step A: Define SPECIFIC niche in 5-15 words: [technology/approach] + [product type] + [target buyer]
+Step B: Run:
+  - "${domain} competitors"
+  - "${domain} alternatives"
+  - "${domain} vs"
+  - "best [niche keywords] software"
+Step C: Include only if all:
+  - Same product type
+  - Same buyer persona/vertical
+  - Same market level (SMB vs enterprise)
+  - Real shortlist overlap
+Exclude broad platforms and guesses.
+${!isClient && clientContext ? `Also search "${domain} vs ${clientContext.domain}" + competitor pricing/reviews for stronger comparison fields.` : ''}
+
+PHASE 7 — LIMITATIONS & GAPS
+14) Search "${domain} complaints", "${domain} problems", "${domain} limitations", "${domain} reddit"
+15) Search "${domain} missing features", "${domain} feature request"
+
+${isCompetitorEnriched ? `DIRECTORY PASS:
+Collect verifiable URLs for social/content/developer/review/business/app profiles.` : ''}
 `;
 
     // Add any pre-scraped context for efficiency
@@ -320,9 +240,27 @@ USP: ${clientContext.usp || 'Not specified'}
 `;
     }
 
-    prompt += `COMPETITOR VALIDATION (strict):
-✓ INCLUDE: Same product type + same buyer persona + same market level
-✗ EXCLUDE: Broad platforms (Salesforce, HubSpot), parent categories, guessed competitors
+    if (isPostCallEnrichment && enrichmentContext) {
+        prompt += `POST-CALL ENRICHMENT CONTEXT:
+${enrichmentContext}
+
+POST-CALL RULES:
+- Fill missing/empty fields using interview and blog context when verifiable.
+- Prioritize filling: tone, activeHours, support/contact details, reviews/limitations confidence notes.
+- Keep already-strong existing fields consistent; do not degrade specificity.
+- If interview claims are not web-verifiable, mark lower confidence and mention in confidenceNotes.
+
+`;
+    }
+
+    prompt += `OUTPUT RULES:
+- Return ONLY valid JSON
+- No markdown wrapper
+- Include searchesPerformed with real query strings used
+- Set confidence honestly:
+  high = pricing/reviews/core data/competitors verified
+  medium = most verified with some gaps
+  low = sparse information
 
 Return ONLY valid JSON:
 
@@ -336,6 +274,69 @@ function shouldEscalateToMaster(result) {
     const lowConfidence = String(result.confidence || '').toLowerCase() === 'low';
     const missingCore = !result.about || !result.niche || !Array.isArray(result.features) || result.features.length < 3;
     return lowConfidence || missingCore;
+}
+
+function isEmptyValue(value) {
+    if (value === null || value === undefined) return true;
+    if (typeof value === "string") return value.trim() === "";
+    if (Array.isArray(value)) return value.length === 0;
+    if (typeof value === "object") return Object.keys(value).length === 0;
+    return false;
+}
+
+function dedupeArray(values) {
+    const seen = new Set();
+    const out = [];
+    for (const item of values || []) {
+        const key = typeof item === "string"
+            ? item.trim().toLowerCase()
+            : JSON.stringify(item);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+    }
+    return out;
+}
+
+function mergeFillMissing(existing, patch) {
+    if (patch === null || patch === undefined) return existing;
+
+    if (Array.isArray(patch)) {
+        if (isEmptyValue(existing)) return dedupeArray(patch);
+        if (Array.isArray(existing)) return dedupeArray([...(existing || []), ...patch]);
+        return existing;
+    }
+
+    if (typeof patch === "object") {
+        const base = (existing && typeof existing === "object" && !Array.isArray(existing)) ? existing : {};
+        const merged = { ...base };
+        for (const [key, value] of Object.entries(patch)) {
+            merged[key] = mergeFillMissing(base[key], value);
+        }
+        return merged;
+    }
+
+    return isEmptyValue(existing) ? patch : existing;
+}
+
+function hasDataReviewCoverageGaps(result) {
+    if (!result) return true;
+    const requiredChecks = [
+        Boolean(result.about),
+        Boolean(result.usp),
+        Boolean(result.icp),
+        Boolean(result.tone),
+        Array.isArray(result.features) && result.features.length >= 3,
+        Array.isArray(result.integrations) && result.integrations.length >= 1,
+        Array.isArray(result.pricing) && result.pricing.length >= 1,
+        Array.isArray(result.compliance) && result.compliance.length >= 1,
+        Array.isArray(result.reviews) && result.reviews.length >= 1,
+        (Array.isArray(result.caseStudies) && result.caseStudies.length >= 1) || (Array.isArray(result.notableCustomers) && result.notableCustomers.length >= 1),
+        !isEmptyValue(result.teamSize) || !isEmptyValue(result.funding),
+        !isEmptyValue(result.support) || !isEmptyValue(result.contact)
+    ];
+    const met = requiredChecks.filter(Boolean).length;
+    return met < 8;
 }
 
 function getProviderFunctionMap() {
@@ -481,14 +482,19 @@ function normalizeResearchOutput(raw) {
 
     // teamSize: normalize from employeeRange or team_size
     result.teamSize = result.teamSize || result.employeeRange || result.team_size || null;
+    result.funding = result.funding || result.fundingTotal || null;
     delete result.employeeRange;
     delete result.team_size;
+    delete result.fundingTotal;
 
     // support: if object, flatten to string
     if (result.support && typeof result.support === 'object') {
         const parts = [];
         if (result.support.channels?.length) parts.push(result.support.channels.join(', '));
-        if (result.support.hours) parts.push(result.support.hours);
+        if (result.support.hours) {
+            parts.push(result.support.hours);
+            result.activeHours = result.activeHours || result.support.hours;
+        }
         if (result.support.notes) parts.push(result.support.notes);
         result.support = parts.join(' — ') || null;
     }
@@ -496,7 +502,7 @@ function normalizeResearchOutput(raw) {
     // Ensure arrays exist
     const arrayFields = ['integrations', 'compliance', 'techStack', 'limitations',
         'commonObjections', 'blogTopics', 'segments', 'contentThemes',
-        'partnerships', 'notableCustomers', 'competitors'];
+        'partnerships', 'notableCustomers', 'competitors', 'searchesPerformed'];
     for (const field of arrayFields) {
         if (!Array.isArray(result[field])) result[field] = [];
     }
@@ -537,7 +543,7 @@ function normalizeResearchOutput(raw) {
         'niche', 'productModel', 'yearFounded', 'headquarters', 'teamSize',
         'funding', 'support', 'confidence', 'confidenceNotes',
         'strengthVsTarget', 'weaknessVsTarget', 'pricingComparison', 'marketPositionVsTarget',
-        'guarantees', 'roadmap', 'changelog'];
+        'guarantees', 'roadmap', 'changelog', 'activeHours', 'contentStrategy', 'researchDate'];
     for (const field of stringFields) {
         if (result[field] === undefined) result[field] = null;
     }
@@ -798,9 +804,151 @@ async function researchCompetitor(domain, clientContext) {
 
     if (!result) return null;
 
-    const normalized = normalizeResearchOutput(result);
+    let normalized = normalizeResearchOutput(result);
+
+    // Quality pass: if competitor data lacks key Data Review coverage, run one targeted backfill.
+    if (hasDataReviewCoverageGaps(normalized)) {
+        try {
+            console.log(`[AI] Competitor coverage gap detected for ${domain}; running one backfill pass...`);
+            const backfill = await enrichEntityPostCall({
+                mode: "competitor",
+                domain,
+                currentData: normalized,
+                clientContext,
+                enrichmentSummary: {
+                    transcriptSummary: "- No interview transcript available",
+                    blogsSummary: "- No blog signals available"
+                }
+            });
+            if (backfill) {
+                normalized = mergeFillMissing(normalized, backfill);
+            }
+        } catch (e) {
+            console.error(`[AI] Competitor coverage backfill failed (non-fatal): ${e.message}`);
+        }
+    }
+
     console.log(`[AI] Competitor done: ${domain} | strength: ${normalized.strengthVsTarget ? 'YES' : 'NO'}`);
     return normalized;
+}
+
+function summarizeInterviewAndBlogs(elevenLabsData = {}, blogPosts = []) {
+    const transcript = Array.isArray(elevenLabsData?.transcript) ? elevenLabsData.transcript : [];
+    const transcriptLines = transcript
+        .slice(-16)
+        .map((msg) => {
+            const role = msg?.role === "user" ? "Client" : "Agent";
+            const text = String(msg?.text || "").replace(/\s+/g, " ").trim();
+            return text ? `- ${role}: ${text.slice(0, 260)}` : null;
+        })
+        .filter(Boolean);
+
+    const blogLines = (Array.isArray(blogPosts) ? blogPosts : [])
+        .slice(0, 10)
+        .map((post) => {
+            const title = String(post?.title || "").trim();
+            const desc = String(post?.description || "").replace(/\s+/g, " ").trim();
+            const url = String(post?.url || "").trim();
+            const bits = [title, desc, url].filter(Boolean);
+            return bits.length > 0 ? `- ${bits.join(" | ").slice(0, 320)}` : null;
+        })
+        .filter(Boolean);
+
+    return {
+        transcriptSummary: transcriptLines.length > 0 ? transcriptLines.join("\n") : "- No interview transcript available",
+        blogsSummary: blogLines.length > 0 ? blogLines.join("\n") : "- No blog signals available"
+    };
+}
+
+async function enrichEntityPostCall({
+    mode,
+    domain,
+    currentData,
+    clientContext,
+    enrichmentSummary
+}) {
+    const currentDataJson = JSON.stringify(currentData || {}, null, 2).slice(0, 12000);
+    const enrichmentContext = `CURRENT DATA SNAPSHOT (fill only missing/weak fields):
+${currentDataJson}
+
+INTERVIEW SUMMARY:
+${enrichmentSummary.transcriptSummary}
+
+BLOG SIGNALS SUMMARY:
+${enrichmentSummary.blogsSummary}`;
+
+    const prompt = buildResearchPrompt(
+        domain,
+        mode,
+        null,
+        clientContext || null,
+        "postcall_enrichment",
+        enrichmentContext
+    );
+
+    const result = await callPrimaryThenFallback(
+        prompt,
+        `postcall-enrichment-${mode}`,
+        { timeoutMs: 45000 }
+    );
+    return normalizeResearchOutput(result);
+}
+
+async function enrichDataReviewPostCall({
+    clientData,
+    compData,
+    competitors,
+    elevenLabsData
+}) {
+    const clientDomain = clientData?.domain;
+    if (!clientDomain) {
+        throw new Error("clientData.domain is required for post-call enrichment");
+    }
+
+    const blogPosts = Array.isArray(clientData?.blogPosts) ? clientData.blogPosts : [];
+    const enrichmentSummary = summarizeInterviewAndBlogs(elevenLabsData || {}, blogPosts);
+    const clientContext = {
+        name: clientData?.name || clientDomain,
+        domain: clientDomain,
+        niche: clientData?.data?.niche || null,
+        usp: clientData?.data?.usp || null
+    };
+
+    const clientDataPatch = await enrichEntityPostCall({
+        mode: "client",
+        domain: clientDomain,
+        currentData: clientData?.data || {},
+        clientContext: null,
+        enrichmentSummary
+    });
+
+    const competitorList = Array.isArray(competitors) ? competitors : [];
+    const competitorPatchesByDomain = {};
+    const failedCompetitors = [];
+
+    for (const competitor of competitorList) {
+        const domain = normalizeDomainKey(competitor?.domain);
+        if (!domain) continue;
+        try {
+            const currentComp = compData?.[domain]?.data || {};
+            competitorPatchesByDomain[domain] = await enrichEntityPostCall({
+                mode: "competitor",
+                domain,
+                currentData: currentComp,
+                clientContext,
+                enrichmentSummary
+            });
+        } catch (error) {
+            failedCompetitors.push({ domain, error: error.message });
+        }
+    }
+
+    return {
+        clientDataPatch,
+        competitorPatchesByDomain,
+        contextSummary: enrichmentSummary,
+        failedCompetitors
+    };
 }
 
 // ============================================
@@ -910,6 +1058,7 @@ async function callOpenAI(prompt, options = {}) {
 module.exports = {
     researchDomain,
     researchCompetitor,
+    enrichDataReviewPostCall,
     buildResearchPrompt,     // exported for testing
     normalizeResearchOutput, // exported for testing
     parseJson

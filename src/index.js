@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
-const { researchDomain, researchCompetitor } = require('./aiService');
+const { researchDomain, researchCompetitor, enrichDataReviewPostCall } = require('./aiService');
 const { getBlogPosts, scrapeFullBlogContent } = require('./blogService');
 const {
     submitToAirtable,
@@ -365,6 +365,58 @@ app.post('/api/research/competitor', async (req, res) => {
         console.error('[BTA] Competitor research error:', error.message);
         tracker.done('error', { error: error.message });
         res.status(500).json({ error: 'Failed to research competitor', details: error.message });
+    }
+});
+
+// ============================================
+// RESEARCH POST-CALL ENRICHMENT: Fill Data Review gaps using interview + blogs
+// ============================================
+app.post('/api/research/data-review-autofill', async (req, res) => {
+    const { clientData, compData = {}, competitors = [], elevenLabsData = {} } = req.body || {};
+    if (!clientData?.domain) {
+        return res.status(400).json({ error: 'clientData.domain is required' });
+    }
+    const tracker = createLatencyTracker('research_data_review_autofill', clientData.domain);
+    try {
+        const result = await enrichDataReviewPostCall({
+            clientData,
+            compData,
+            competitors,
+            elevenLabsData
+        });
+        tracker.done('ok', {
+            competitors: Array.isArray(competitors) ? competitors.length : 0,
+            failedCompetitors: result.failedCompetitors?.length || 0
+        });
+        res.json({
+            status: 'success',
+            ...result
+        });
+    } catch (error) {
+        tracker.done('error', { error: error.message });
+        console.error('[BTA] Data review autofill error:', error.message);
+        res.status(500).json({ error: 'Failed to autofill data review', details: error.message });
+    }
+});
+
+app.post('/api/research/context-summary', async (req, res) => {
+    const { clientData, elevenLabsData = {} } = req.body || {};
+    if (!clientData?.domain) {
+        return res.status(400).json({ error: 'clientData.domain is required' });
+    }
+    try {
+        const blogPosts = Array.isArray(clientData?.blogPosts) ? clientData.blogPosts.slice(0, 10) : [];
+        const transcript = Array.isArray(elevenLabsData?.transcript) ? elevenLabsData.transcript.slice(-16) : [];
+        const transcriptSummary = transcript.map((m) => `${m?.role || 'unknown'}: ${String(m?.text || '').slice(0, 260)}`).join('\n');
+        const blogsSummary = blogPosts.map((b) => `${b?.title || 'untitled'} | ${b?.url || ''}`).join('\n');
+        res.json({
+            status: 'success',
+            transcriptSummary: transcriptSummary || null,
+            blogsSummary: blogsSummary || null
+        });
+    } catch (error) {
+        console.error('[BTA] Context summary error:', error.message);
+        res.status(500).json({ error: 'Failed to summarize context', details: error.message });
     }
 });
 
