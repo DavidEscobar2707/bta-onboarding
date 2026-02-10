@@ -2,6 +2,11 @@ const { GoogleGenAI } = require("@google/genai");
 const OpenAI = require("openai");
 const { scrapeStructuralData } = require("./structuralScraper");
 
+// Keep runtime predictable near ship: fewer env toggles, stable defaults.
+const ONBOARD_TIMEOUT_MS = 30000;
+const DEFAULT_CLIENT_PROMPT_MODE = "lite";
+const DEFAULT_COMPETITOR_PROMPT_MODE = "competitor_enriched";
+
 // ============================================
 // UNIVERSAL RESEARCH PROMPT (DRY)
 // One function for client AND competitor research
@@ -19,6 +24,83 @@ function buildJsonSchema(domain, mode, promptMode = 'master') {
   "pricing": [{"tier": "Name", "price": "$", "period": "/month"}],
   "competitors": [{"domain": "competitor.com", "name": "Name", "reason": "Same product + same buyer"}],
   "confidence": "high | medium | low"
+}`;
+    }
+
+    if (promptMode === 'competitor_enriched' && mode === 'competitor') {
+        return `{
+  "name": "Official Company Name",
+  "domain": "${domain}",
+  "about": "Company summary or null",
+  "niche": "Specific niche",
+  "usp": "Unique selling proposition or null",
+  "icp": "Ideal customer profile or null",
+  "features": ["Specific product features"],
+  "integrations": ["Known integrations"],
+  "pricing": [{"tier": "Name", "price": "$", "period": "/month"}],
+  "compliance": ["SOC 2", "GDPR", "HIPAA", "CCPA", "ISO 27001", "PCI DSS"],
+  "reviews": [{"platform": "G2|Capterra|Trustpilot|Glassdoor|Yelp|BBB", "score": "4.8", "count": "150", "summary": "Theme"}],
+  "caseStudies": [{"company": "Customer", "result": "Outcome", "industry": "Industry"}],
+  "limitations": ["Known limitations"],
+  "techStack": ["Known technologies"],
+  "funding": "Funding summary or null",
+  "teamSize": "Team size range or null",
+  "guarantees": "Guarantees or SLAs or null",
+  "roadmap": "Roadmap summary or null",
+  "segments": ["Customer segments"],
+  "contentThemes": ["Content themes"],
+  "partnerships": ["Partnerships"],
+  "changelog": "Product updates/changelog summary or null",
+  "contact": [{"label": "Sales Email", "value": "sales@domain.com", "type": "email"}],
+  "founders": [{"name": "Full name", "role": "Title", "background": "Brief background", "linkedin": "URL or null"}],
+  "social": {
+    "twitter": "URL or null",
+    "linkedin": "URL or null",
+    "facebook": "URL or null",
+    "instagram": "URL or null",
+    "threads": "URL or null",
+    "bluesky": "URL or null",
+    "tiktok": "URL or null"
+  },
+  "contentProfiles": {
+    "youtube": "URL or null",
+    "medium": "URL or null",
+    "substack": "URL or null",
+    "podcast": "URL or null",
+    "pinterest": "URL or null",
+    "dribbble": "URL or null"
+  },
+  "developerProfiles": {
+    "github": "URL or null",
+    "productHunt": "URL or null",
+    "discord": "URL or null",
+    "slackCommunity": "URL or null",
+    "reddit": "URL or null"
+  },
+  "reviewProfiles": {
+    "g2": "URL or null",
+    "capterra": "URL or null",
+    "trustpilot": "URL or null",
+    "glassdoor": "URL or null",
+    "yelp": "URL or null",
+    "bbb": "URL or null"
+  },
+  "businessProfiles": {
+    "crunchbase": "URL or null",
+    "wikipedia": "URL or null",
+    "googleBusiness": "URL or null",
+    "wellfound": "URL or null"
+  },
+  "appProfiles": {
+    "appStore": "URL or null",
+    "playStore": "URL or null"
+  },
+  "strengthVsTarget": "Where stronger vs target",
+  "weaknessVsTarget": "Where weaker vs target",
+  "pricingComparison": "Cheaper | Similar | More expensive | Unknown",
+  "marketPositionVsTarget": "Brief positioning comparison",
+  "confidence": "high | medium | low",
+  "confidenceNotes": "What was verified vs missing"
 }`;
     }
 
@@ -196,10 +278,11 @@ function buildResearchPrompt(domain, mode, structuralContext, clientContext, pro
     // 3 STRATEGIC QUERIES - minimal but comprehensive
     const isClient = mode === 'client';
     const isLite = promptMode === 'lite';
+    const isCompetitorEnriched = mode === 'competitor' && promptMode === 'competitor_enriched';
     
     let prompt = `You are a senior competitive intelligence analyst researching ${domain}.
 
-${isLite ? 'You are in LITE mode: prioritize speed and accuracy. Use concise extraction.' : 'You are in MASTER mode: prioritize depth and coverage.'}
+${isCompetitorEnriched ? 'You are in COMPETITOR_ENRICHED mode: maximize verified profile coverage in one pass. Return null/empty values for unknowns. Do not invent links.' : (isLite ? 'You are in LITE mode: prioritize speed and accuracy. Use concise extraction.' : 'You are in MASTER mode: prioritize depth and coverage.')}
 
 Run these strategic web searches and extract data:
 
@@ -213,6 +296,9 @@ ${!isClient && clientContext ? `→ Also search "${domain} vs ${clientContext.do
 
 QUERY 3: "${domain} reviews" "${domain} G2" "${domain} problems"
 → Review sentiment (positive/negative), key limitations/complaints, common objections
+
+${isCompetitorEnriched ? `QUERY 4: "${domain}" "twitter OR linkedin OR github OR product hunt OR crunchbase OR wikipedia OR app store OR play store"
+→ Collect public profile/directory URLs when verifiable (social, content, developer, reviews, business, app stores).` : ''}
 
 `;
 
@@ -264,9 +350,19 @@ function getProviderOrder() {
     const providerMap = getProviderFunctionMap();
     const configuredPrimary = String(process.env.AI_PROVIDER_PRIMARY || 'openai').toLowerCase();
     const primary = providerMap[configuredPrimary] ? configuredPrimary : 'openai';
-    const preferredFallbackOrder = ['openai', 'perplexity', 'gemini'];
+    const preferredFallbackOrder = ['openai', 'gemini', 'perplexity'];
     const fallbacks = preferredFallbackOrder.filter(p => p !== primary && providerMap[p]);
     return [primary, ...fallbacks];
+}
+
+function isTimeoutError(error) {
+    const message = String(error?.message || error || "").toLowerCase();
+    return (
+        message.includes("timed out") ||
+        message.includes("timeout") ||
+        message.includes("etimedout") ||
+        message.includes("deadline exceeded")
+    );
 }
 
 function isGeminiQuotaError(error) {
@@ -282,11 +378,18 @@ function isGeminiQuotaError(error) {
 }
 
 async function callPrimaryThenFallback(prompt, context = "research", options = {}) {
-    const fallbackEnabled = String(process.env.AI_FALLBACK_ENABLED || 'true').toLowerCase() !== 'false';
-    const fastFailOnGeminiQuota = String(process.env.AI_FAST_FAIL_ON_GEMINI_QUOTA || 'true').toLowerCase() !== 'false';
+    const fallbackEnabled = true;
+    const fastFailOnGeminiQuota = true;
     const providerMap = getProviderFunctionMap();
-    const providerOrder = getProviderOrder();
+    const forcedSkipProviders = Array.isArray(options.skipProviders)
+        ? options.skipProviders.map((p) => String(p).toLowerCase())
+        : [];
+    const providerOrder = getProviderOrder().filter((provider) => !forcedSkipProviders.includes(provider));
     const providerOptions = options || {};
+
+    if (providerOrder.length === 0) {
+        throw new Error("No providers available after skipProviders filter");
+    }
 
     const primaryProvider = providerOrder[0];
     const primaryFn = providerMap[primaryProvider];
@@ -298,8 +401,19 @@ async function callPrimaryThenFallback(prompt, context = "research", options = {
         return primaryResult;
     } catch (e) {
         console.error(`[AI] [${context}] Primary provider failed (${primaryProvider}): ${e.message}`);
+        if (typeof providerOptions.onPrimaryFailure === "function") {
+            try {
+                providerOptions.onPrimaryFailure({
+                    provider: primaryProvider,
+                    error: e,
+                    context
+                });
+            } catch {
+                // Keep provider routing resilient; ignore observer errors.
+            }
+        }
         if (primaryProvider === 'gemini' && fastFailOnGeminiQuota && isGeminiQuotaError(e)) {
-            throw new Error("Gemini quota exceeded. Fast-fail enabled, skipping OpenAI fallback to avoid slow response.");
+            console.warn(`[AI] [${context}] Gemini quota detected on primary. Continuing to next fallback provider.`);
         }
         if (!fallbackEnabled) throw e;
     }
@@ -393,14 +507,37 @@ function normalizeResearchOutput(raw) {
         if (!Array.isArray(result[field])) result[field] = [];
     }
 
-    // Ensure social object
+    // Ensure profile objects
     result.social = result.social || {};
+    result.contentProfiles = result.contentProfiles || {};
+    result.developerProfiles = result.developerProfiles || {};
+    result.reviewProfiles = result.reviewProfiles || {};
+    result.businessProfiles = result.businessProfiles || {};
+    result.appProfiles = result.appProfiles || {};
+
+    const profileDefaults = {
+        social: ['twitter', 'linkedin', 'facebook', 'instagram', 'threads', 'bluesky', 'tiktok'],
+        contentProfiles: ['youtube', 'medium', 'substack', 'podcast', 'pinterest', 'dribbble'],
+        developerProfiles: ['github', 'productHunt', 'discord', 'slackCommunity', 'reddit'],
+        reviewProfiles: ['g2', 'capterra', 'trustpilot', 'glassdoor', 'yelp', 'bbb'],
+        businessProfiles: ['crunchbase', 'wikipedia', 'googleBusiness', 'wellfound'],
+        appProfiles: ['appStore', 'playStore']
+    };
+    for (const [objKey, keys] of Object.entries(profileDefaults)) {
+        const source = result[objKey] && typeof result[objKey] === 'object' ? result[objKey] : {};
+        const normalizedObj = {};
+        for (const key of keys) {
+            normalizedObj[key] = source[key] ?? null;
+        }
+        result[objKey] = normalizedObj;
+    }
 
     // Ensure string fields
     const stringFields = ['name', 'domain', 'usp', 'icp', 'tone', 'about', 'industry',
         'niche', 'productModel', 'yearFounded', 'headquarters', 'teamSize',
         'funding', 'support', 'confidence', 'confidenceNotes',
-        'strengthVsTarget', 'weaknessVsTarget', 'pricingComparison', 'marketPositionVsTarget'];
+        'strengthVsTarget', 'weaknessVsTarget', 'pricingComparison', 'marketPositionVsTarget',
+        'guarantees', 'roadmap', 'changelog'];
     for (const field of stringFields) {
         if (result[field] === undefined) result[field] = null;
     }
@@ -490,9 +627,8 @@ function mergeAndDedupeCompetitors(...lists) {
 async function researchDomain(domain) {
     console.log(`[AI] ═══ Starting research for: ${domain} ═══`);
     const minCompetitors = 5;
-    const researchMode = String(process.env.RESEARCH_SPEED_MODE || 'balanced').toLowerCase();
-    const fastestMode = researchMode === 'fastest';
-    const onboardTimeoutMs = Math.max(5000, Number(process.env.ONBOARD_AI_TIMEOUT_MS || (fastestMode ? 30000 : 60000)));
+    const fastestMode = false;
+    const onboardTimeoutMs = ONBOARD_TIMEOUT_MS;
     const timings = {};
 
     // Phase 1: Free structural scrape
@@ -508,18 +644,27 @@ async function researchDomain(domain) {
 
     const promptMode = fastestMode
         ? 'fastest'
-        : (process.env.RESEARCH_PROMPT_MODE || 'lite').toLowerCase();
+        : DEFAULT_CLIENT_PROMPT_MODE;
     const prompt = buildResearchPrompt(domain, 'client', structuralData, null, promptMode);
 
     let result = null;
     let competitors = [];
+    let skipOpenAIForThisRun = false;
 
     try {
         const primaryStartedAt = Date.now();
         result = await callPrimaryThenFallback(
             prompt,
             "research-domain-primary",
-            { timeoutMs: onboardTimeoutMs }
+            {
+                timeoutMs: onboardTimeoutMs,
+                onPrimaryFailure: ({ provider, error }) => {
+                    if (provider === "openai" && isTimeoutError(error)) {
+                        skipOpenAIForThisRun = true;
+                        console.warn("[AI] Circuit breaker: OpenAI timed out on primary stage; skipping OpenAI for remaining onboard stages.");
+                    }
+                }
+            }
         );
         timings.primaryProviderMs = Date.now() - primaryStartedAt;
         console.log(`[AI] Primary research succeeded! Company: "${result.name}" | Niche: "${result.niche}"`);
@@ -530,6 +675,10 @@ async function researchDomain(domain) {
     } catch (e) {
         timings.primaryProviderMs = timings.primaryProviderMs || 0;
         console.error(`[AI] All providers failed on primary pass: ${e.message}`);
+        if (isTimeoutError(e) || String(e.message || "").toLowerCase().includes("openai responses failed")) {
+            skipOpenAIForThisRun = true;
+            console.warn("[AI] Circuit breaker: OpenAI disabled for remaining onboard stages in this request.");
+        }
     }
 
     // Optional master escalation when lite output is weak (disabled in fastest mode)
@@ -541,7 +690,10 @@ async function researchDomain(domain) {
             const masterResult = await callPrimaryThenFallback(
                 masterPrompt,
                 "research-domain-master",
-                { timeoutMs: onboardTimeoutMs }
+                {
+                    timeoutMs: onboardTimeoutMs,
+                    skipProviders: skipOpenAIForThisRun ? ["openai"] : []
+                }
             );
             timings.masterProviderMs = Date.now() - masterStartedAt;
             if (masterResult) {
@@ -565,7 +717,10 @@ async function researchDomain(domain) {
             const discoveryResult = await callPrimaryThenFallback(
                 competitorPrompt,
                 "competitor-discovery-recovery",
-                { timeoutMs: onboardTimeoutMs }
+                {
+                    timeoutMs: onboardTimeoutMs,
+                    skipProviders: skipOpenAIForThisRun ? ["openai"] : []
+                }
             );
             timings.recoveryProviderMs = Date.now() - recoveryStartedAt;
             if (discoveryResult && discoveryResult.competitors && discoveryResult.competitors.length > 0) {
@@ -616,8 +771,10 @@ async function researchCompetitor(domain, clientContext) {
         console.log(`[AI] Structural scrape failed (non-fatal): ${e.message}`);
     }
 
-    const promptMode = (process.env.RESEARCH_PROMPT_MODE || 'lite').toLowerCase();
-    const prompt = buildResearchPrompt(domain, 'competitor', structuralData, clientContext, promptMode);
+    const defaultPromptMode = DEFAULT_CLIENT_PROMPT_MODE;
+    const competitorResearchMode = DEFAULT_COMPETITOR_PROMPT_MODE;
+    const activePromptMode = competitorResearchMode === 'default' ? defaultPromptMode : competitorResearchMode;
+    const prompt = buildResearchPrompt(domain, 'competitor', structuralData, clientContext, activePromptMode);
 
     let result = null;
     try {
@@ -627,7 +784,7 @@ async function researchCompetitor(domain, clientContext) {
         console.error(`[AI] Primary/fallback failed for competitor ${domain}: ${e.message}`);
     }
 
-    if (result && promptMode === 'lite' && shouldEscalateToMaster(result)) {
+    if (result && activePromptMode === 'lite' && shouldEscalateToMaster(result)) {
         try {
             const masterPrompt = buildResearchPrompt(domain, 'competitor', structuralData, clientContext, 'master');
             const masterResult = await callPrimaryThenFallback(masterPrompt, "research-competitor-master");
@@ -727,7 +884,8 @@ async function callOpenAI(prompt, options = {}) {
     console.log("[AI] Calling OpenAI GPT-4o with web search...");
     const openai = new OpenAI({
         apiKey: process.env.OPENAI_API_KEY,
-        timeout: timeoutMs
+        timeout: timeoutMs,
+        maxRetries: 0
     });
 
     try {
@@ -740,26 +898,8 @@ async function callOpenAI(prompt, options = {}) {
 
         return parseJson(response.output_text);
     } catch (error) {
-        console.warn(`[AI] Responses API failed: ${error.message}, trying chat completions...`);
-
-        // Fallback to standard chat completions (without web search)
-        const completion = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-                {
-                    role: "system",
-                    content: "You are a research assistant. Search the web and provide detailed information."
-                },
-                {
-                    role: "user",
-                    content: prompt
-                }
-            ],
-            temperature: 0.7,
-            max_tokens: 4000
-        });
-
-        return parseJson(completion.choices[0].message.content);
+        console.warn(`[AI] Responses API failed (no non-web fallback): ${error.message}`);
+        throw new Error(`OpenAI responses failed: ${error.message}`);
     }
 }
 

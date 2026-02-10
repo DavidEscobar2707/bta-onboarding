@@ -2,6 +2,14 @@ const OpenAI = require("openai");
 const axios = require("axios");
 const cheerio = require("cheerio");
 
+// Production defaults for consistent quality and simpler config
+const BLOG_MAX_AGE_MONTHS = 12;
+const BLOG_MIN_WORDS = 350;
+const BLOG_MIN_EDITORIAL_SCORE = 3;
+const BLOG_VERIFY_LIMIT = 8;
+const BLOG_SCRAPE_TIMEOUT_MS = 6500;
+const BLOG_SCRAPE_CONCURRENCY = 5;
+
 // Puppeteer for JS-rendered pages (optional, loaded dynamically)
 let puppeteer = null;
 try {
@@ -253,7 +261,18 @@ function normalizeUrl(url) {
             pathname = pathname.slice(0, -1);
         }
 
-        // Return normalized string (ignore hash/search for blog identity usually)
+        // Remove tracking query params and hash for canonical dedupe
+        const trackingPrefixes = ['utm_', 'ga_', 'pk_'];
+        const trackingKeys = ['fbclid', 'gclid', 'igshid', 'mc_cid', 'mc_eid', 'ref', 'source'];
+        for (const [key] of parsed.searchParams.entries()) {
+            const lower = key.toLowerCase();
+            const prefixed = trackingPrefixes.some(prefix => lower.startsWith(prefix));
+            if (prefixed || trackingKeys.includes(lower)) {
+                parsed.searchParams.delete(key);
+            }
+        }
+
+        // Use path-only canonical identity for dedupe and strip hash fragment.
         return `${parsed.protocol}//${hostname}${pathname}`;
     } catch {
         return url;
@@ -331,10 +350,36 @@ function isQualityEditorialContent(url, wordCount = null) {
     return score >= 3; // Need 3 of 4 signals
 }
 
+function getFreshnessScore(dateValue, maxAgeMonths) {
+    const publishedDate = parsePublishedDate(dateValue);
+    if (!publishedDate) return 0.25; // unknown date: small positive, but below recent content
+    const now = Date.now();
+    const ageDays = Math.max(0, (now - publishedDate.getTime()) / (1000 * 60 * 60 * 24));
+    const maxDays = Math.max(30, maxAgeMonths * 30);
+    const normalized = 1 - Math.min(1, ageDays / maxDays);
+    return Math.max(0, Number(normalized.toFixed(3)));
+}
+
+function looksPromotional(post) {
+    const text = `${post?.title || ''} ${post?.description || ''} ${post?.url || ''}`.toLowerCase();
+    const patterns = [
+        /\bbook a demo\b/,
+        /\brequest a demo\b/,
+        /\bstart free trial\b/,
+        /\bbuy now\b/,
+        /\bget started\b/,
+        /\bpricing\b/,
+        /\bproduct tour\b/,
+        /\bsign up\b/,
+        /\bcontact sales\b/
+    ];
+    return patterns.some((pattern) => pattern.test(text));
+}
+
 // ============================================
 // SCRAPE FULL BLOG CONTENT
 // ============================================
-async function scrapeFullBlogContent(url) {
+async function scrapeFullBlogContent(url, timeoutMs = 8000) {
     try {
         console.log(`[Blog] Scraping full content: ${url}`);
         
@@ -350,7 +395,7 @@ async function scrapeFullBlogContent(url) {
         }
         
         const { data } = await axios.get(url, {
-            timeout: 8000,
+            timeout: timeoutMs,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
@@ -477,6 +522,7 @@ async function findBlogsWithOpenAI(domain, limit = 10) {
     try {
         console.log(`[Blog] Using OpenAI web search to find top ${limit} blogs for ${domain}...`);
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        const maxAgeMonths = BLOG_MAX_AGE_MONTHS;
 
         const response = await openai.responses.create({
             model: "gpt-4o",
@@ -497,8 +543,10 @@ Use these Google search operators to find articles:
 WHAT TO LOOK FOR:
 - Articles with LONG, DESCRIPTIVE SLUGS (e.g., "/how-to-automate-leasing-communications")
 - Editorial content that teaches, explains, or compares
-- Thought leadership pieces
-- NOT product pages, pricing, demos, or landing pages
+- Thought leadership pieces with actionable depth
+- Prefer content published within the last ${maxAgeMonths} months when available
+- Favor canonical article links over tracking/redirect URLs
+- NOT product pages, pricing, demos, landing pages, press snippets, short announcements, or changelog entries
 - URLs WITHOUT: /product, /pricing, /demo, /features, /landing, /buy
 
 These might be "orphaned" articles not linked from main navigation - that's OK.
@@ -507,6 +555,7 @@ For each REAL article found:
 - The exact full URL
 - The article title
 - A brief description of what it's about
+- Optional date if available
 
 Respond with JSON:
 {
@@ -514,7 +563,8 @@ Respond with JSON:
         {
             "url": "https://${domain}/example-article-slug",
             "title": "Article Title",
-            "description": "Brief description"
+            "description": "Brief description",
+            "date": "ISO or human readable date if available"
         }
     ]
 }
@@ -548,14 +598,16 @@ If no articles found, return: {"blogPosts": []}`
                 
                 // Should look like an article slug (has words separated by dashes)
                 const slug = path.split('/').filter(Boolean).pop() || '';
-                return slug.includes('-') && slug.length > 10;
+                if (!(slug.includes('-') && slug.length > 10)) return false;
+                if (looksPromotional(p)) return false;
+                return true;
             });
             
             console.log(`[Blog] OpenAI found ${validPosts.length} valid EDITORIAL items (filtered from ${parsed.blogPosts.length})`);
 
             return validPosts.slice(0, limit).map((p, i) => ({
                 id: i + 1,
-                url: p.url,
+                url: normalizeUrl(p.url),
                 title: p.title || safeDecodeSlug(p.url),
                 date: p.date || null,
                 description: p.description || "",
@@ -876,12 +928,13 @@ async function findBlogsWithPuppeteer(domain, limit = 10) {
 // ============================================
 // VERIFY URLs are accessible (HEAD check)
 // ============================================
-async function verifyUrls(posts) {
+async function verifyUrls(posts, maxChecks = 10) {
     if (posts.length === 0) return [];
 
-    console.log(`[Blog] Verifying ${posts.length} URLs...`);
+    const targetPosts = posts.slice(0, Math.max(1, maxChecks));
+    console.log(`[Blog] Verifying ${targetPosts.length}/${posts.length} URLs...`);
     const checks = await Promise.allSettled(
-        posts.map((post) =>
+        targetPosts.map((post) =>
             axios.head(post.url, {
                 timeout: 5000,
                 maxRedirects: 3,
@@ -892,13 +945,13 @@ async function verifyUrls(posts) {
     const verified = [];
     checks.forEach((check, idx) => {
         if (check.status === 'fulfilled') {
-            verified.push(posts[idx]);
+            verified.push(targetPosts[idx]);
         } else {
-            console.log(`[Blog] Skipped (not accessible): ${posts[idx].url}`);
+            console.log(`[Blog] Skipped (not accessible): ${targetPosts[idx].url}`);
         }
     });
 
-    console.log(`[Blog] Verified ${verified.length}/${posts.length} editorial URLs`);
+    console.log(`[Blog] Verified ${verified.length}/${targetPosts.length} editorial URLs`);
     return verified;
 }
 
@@ -924,6 +977,11 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 // ============================================
 async function getBlogPosts(domain, limit = 10) {
     console.log(`[Blog] ═══ Finding TOP ${limit} EDITORIAL_CONTENT items for: ${domain} ═══`);
+    const maxAgeMonths = BLOG_MAX_AGE_MONTHS;
+    const minWords = BLOG_MIN_WORDS;
+    const minEditorialScore = BLOG_MIN_EDITORIAL_SCORE;
+    const verifyLimit = BLOG_VERIFY_LIMIT;
+    const scrapeTimeoutMs = BLOG_SCRAPE_TIMEOUT_MS;
 
     let posts = [];
 
@@ -959,7 +1017,7 @@ async function getBlogPosts(domain, limit = 10) {
 
     // Verify URLs exist
     if (posts.length > 0) {
-        posts = await verifyUrls(posts);
+        posts = await verifyUrls(posts, verifyLimit);
     }
 
     // Deduplicate based on normalized URLs
@@ -977,15 +1035,15 @@ async function getBlogPosts(domain, limit = 10) {
     posts = uniquePosts.map((post, i) => ({ ...post, id: i + 1 }));
 
     // Limit to top 10
-    posts = posts.slice(0, 10);
+    posts = posts.slice(0, Math.min(10, Number(limit) || 10));
 
     // Scrape full content for each post
     if (posts.length > 0) {
-        const scrapeConcurrency = Math.max(1, Number(process.env.BLOG_SCRAPE_CONCURRENCY || 5));
+        const scrapeConcurrency = BLOG_SCRAPE_CONCURRENCY;
         console.log(`[Blog] Scraping full content for ${posts.length} editorial items (concurrency: ${scrapeConcurrency})...`);
 
         const scrapedByIndex = await mapWithConcurrency(posts, scrapeConcurrency, async (post) => {
-            return scrapeFullBlogContent(post.url);
+            return scrapeFullBlogContent(post.url, scrapeTimeoutMs);
         });
 
         const postsWithContent = [];
@@ -993,13 +1051,24 @@ async function getBlogPosts(domain, limit = 10) {
             const scraped = scrapedByIndex[i];
             if (scraped && scraped.content) {
                 // Filter out low-quality or unscrapeable content
-                if (scraped.wordCount < 300) {
-                    console.log(`[Blog] EDITORIAL_DETECTED_BUT_NOT_SCRAPABLE: ${posts[i].url} (${scraped.wordCount} words)`);
+                if (scraped.wordCount < minWords) {
+                    console.log(`[Blog] LOW_QUALITY_CONTENT: ${posts[i].url} (${scraped.wordCount} words < min ${minWords})`);
+                    continue;
+                }
+
+                if (looksPromotional(posts[i])) {
+                    console.log(`[Blog] PROMOTIONAL_CONTENT_SKIPPED: ${posts[i].url}`);
                     continue; // Skip this post - not enough content
                 }
                 
                 // Calculate editorial quality score
                 const score = calculateEditorialScore(posts[i].url, scraped.wordCount);
+                if (score < minEditorialScore || !isQualityEditorialContent(posts[i].url, scraped.wordCount)) {
+                    console.log(`[Blog] LOW_EDITORIAL_SCORE: ${posts[i].url} (${score}/4 < min ${minEditorialScore})`);
+                    continue;
+                }
+                const freshnessScore = getFreshnessScore(scraped.publishDate || posts[i].date, maxAgeMonths);
+                const qualityScore = Number(((score * 1.7) + (freshnessScore * 2.3)).toFixed(3));
                 console.log(`[Blog] Editorial score ${score}/4 for: ${posts[i].url}`);
                 
                 postsWithContent.push({
@@ -1015,6 +1084,8 @@ async function getBlogPosts(domain, limit = 10) {
                     readingTime: scraped.readingTime,
                     scrapedAt: scraped.scrapedAt,
                     editorialScore: score,
+                    freshnessScore,
+                    qualityScore,
                     contentType: 'EDITORIAL_CONTENT'
                 });
             } else {
@@ -1030,7 +1101,6 @@ async function getBlogPosts(domain, limit = 10) {
         return [];
     }
 
-    const maxAgeMonths = Math.max(1, Number(process.env.BLOG_MAX_AGE_MONTHS || 12));
     const beforeFreshness = posts.length;
     let droppedByAge = 0;
     let unknownDates = 0;
@@ -1052,8 +1122,10 @@ async function getBlogPosts(domain, limit = 10) {
         console.log(`[Blog] Freshness filter kept all ${posts.length} posts (maxAgeMonths=${maxAgeMonths}, unknownDates=${unknownDates})`);
     }
 
-    // Sort by editorial score first, then by recency when date exists
+    // Sort by combined quality score first, then by editorial score, then by recency
     posts.sort((a, b) => {
+        const qualityDiff = (b.qualityScore || 0) - (a.qualityScore || 0);
+        if (qualityDiff !== 0) return qualityDiff;
         const scoreDiff = (b.editorialScore || 0) - (a.editorialScore || 0);
         if (scoreDiff !== 0) return scoreDiff;
         const aTs = parsePublishedDate(a.date)?.getTime() || 0;

@@ -2,8 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const { researchDomain, researchCompetitor } = require('./aiService');
-const { getBlogPosts } = require('./blogService');
-const { submitToAirtable, getClientsFromAirtable } = require('./airtableService');
+const { getBlogPosts, scrapeFullBlogContent } = require('./blogService');
+const {
+    submitToAirtable,
+    getClientsFromAirtable,
+    createOnboardingSession,
+    getOnboardingSessionByToken
+} = require('./airtableService');
 const { submitToNotion } = require('./notionService');
 require('dotenv').config();
 
@@ -12,9 +17,71 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 3000;
+const FORM_TOKEN_TTL_DAYS = Math.max(1, Number(process.env.FORM_TOKEN_TTL_DAYS || 3));
+const BLOG_CACHE_TTL_MS = 86_400_000;
+const BLOG_SCRAPE_TIMEOUT_MS = 6500;
 
 // In-memory store for form tokens (maps token -> domain)
 const formTokens = new Map();
+const blogCache = new Map();
+
+function normalizeDomainForCache(input) {
+    if (!input) return null;
+    try {
+        const withProtocol = /^https?:\/\//i.test(input) ? input : `https://${input}`;
+        const parsed = new URL(withProtocol);
+        return parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    } catch {
+        return String(input)
+            .trim()
+            .toLowerCase()
+            .replace(/^https?:\/\//i, '')
+            .replace(/^www\./i, '')
+            .split('/')[0] || null;
+    }
+}
+
+function buildBlogCacheKey(domain, limit) {
+    const normalizedDomain = normalizeDomainForCache(domain) || String(domain || '').toLowerCase();
+    const normalizedLimit = Math.max(1, Number(limit) || 20);
+    return `${normalizedDomain}::${normalizedLimit}`;
+}
+
+function pruneExpiredBlogCache(now, ttlMs) {
+    for (const [key, value] of blogCache.entries()) {
+        if (!value?.cachedAt || (now - value.cachedAt) > ttlMs) {
+            blogCache.delete(key);
+        }
+    }
+}
+
+function normalizeBlogInputUrl(rawUrl) {
+    const trimmed = String(rawUrl || '').trim();
+    if (!trimmed) return null;
+    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    try {
+        return new URL(withProtocol).href;
+    } catch {
+        return null;
+    }
+}
+
+function deriveTitleFromUrl(url) {
+    try {
+        const parsed = new URL(url);
+        const slug = parsed.pathname.split('/').filter(Boolean).pop() || parsed.hostname;
+        return decodeURIComponent(slug)
+            .replace(/[-_]+/g, ' ')
+            .replace(/\.\w+$/, '')
+            .trim()
+            .split(' ')
+            .filter(Boolean)
+            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ') || parsed.hostname;
+    } catch {
+        return 'Manual Blog';
+    }
+}
 
 function createLatencyTracker(operation, domain = 'n/a') {
     const startedAt = Date.now();
@@ -26,6 +93,45 @@ function createLatencyTracker(operation, domain = 'n/a') {
             console.log(`[METRICS] op=${operation} requestId=${requestId} domain=${domain} latencyMs=${latencyMs} status=${status} extra=${JSON.stringify(extra)}`);
         }
     };
+}
+
+async function resolveTokenData(token) {
+    const memoryData = formTokens.get(token);
+    if (memoryData) {
+        const expiresAtMs = memoryData.expiresAt ? Date.parse(memoryData.expiresAt) : Number.NaN;
+        if (Number.isFinite(expiresAtMs) && Date.now() > expiresAtMs) {
+            formTokens.delete(token);
+        } else {
+            return { source: 'memory', tokenData: memoryData };
+        }
+    }
+
+    const persisted = await getOnboardingSessionByToken(token);
+    if (!persisted) return null;
+
+    const session = persisted.session || {};
+    const persistedExpiresAtMs = session.expiresAt ? Date.parse(session.expiresAt) : Number.NaN;
+    if (Number.isFinite(persistedExpiresAtMs) && Date.now() > persistedExpiresAtMs) {
+        return null;
+    }
+    if (String(session.status || '').toUpperCase() === 'COMPLETED') {
+        return null;
+    }
+
+    const payload = persisted.formPayload || {};
+    const tokenData = {
+        domain: payload.domain || persisted.domain,
+        clientName: payload.clientName || persisted.clientName || persisted.domain,
+        clientData: payload.clientData || null,
+        competitors: payload.competitors || [],
+        competitorDetails: payload.competitorDetails || {},
+        blogPosts: payload.blogPosts || [],
+        createdAt: session.createdAt || new Date().toISOString(),
+        expiresAt: session.expiresAt || null,
+        persistedRecordId: persisted.recordId
+    };
+    formTokens.set(token, tokenData);
+    return { source: 'airtable', tokenData };
 }
 
 // ============================================
@@ -84,16 +190,83 @@ app.post('/api/blogs', async (req, res) => {
     const { domain, limit = 20 } = req.body;
     if (!domain) return res.status(400).json({ error: 'Domain is required' });
     const tracker = createLatencyTracker('blogs', domain);
+    const ttlMs = BLOG_CACHE_TTL_MS;
+    const cacheKey = buildBlogCacheKey(domain, limit);
+    const now = Date.now();
+
+    pruneExpiredBlogCache(now, ttlMs);
 
     try {
         console.log(`[BTA] Finding blog posts for: ${domain}`);
+        const cached = blogCache.get(cacheKey);
+        if (cached && Array.isArray(cached.blogPosts) && (now - cached.cachedAt) <= ttlMs) {
+            const cacheAgeMs = now - cached.cachedAt;
+            console.log(`[BTA] Blog cache hit for ${domain} | key=${cacheKey} | ageMs=${cacheAgeMs}`);
+            res.json({
+                domain,
+                status: 'success',
+                count: cached.blogPosts.length,
+                blogPosts: cached.blogPosts,
+                cache: { hit: true, ageMs: cacheAgeMs }
+            });
+            tracker.done('ok', { count: cached.blogPosts.length, cache_hit: true, cache_age_ms: cacheAgeMs });
+            return;
+        }
+
+        console.log(`[BTA] Blog cache miss for ${domain} | key=${cacheKey}`);
         const blogPosts = await getBlogPosts(domain, limit);
-        res.json({ domain, status: 'success', count: blogPosts.length, blogPosts });
-        tracker.done('ok', { count: blogPosts.length });
+        blogCache.set(cacheKey, { blogPosts, cachedAt: Date.now() });
+        res.json({
+            domain,
+            status: 'success',
+            count: blogPosts.length,
+            blogPosts,
+            cache: { hit: false, ageMs: 0 }
+        });
+        tracker.done('ok', { count: blogPosts.length, cache_hit: false, cache_miss: true, cache_age_ms: 0 });
     } catch (error) {
         console.error('[BTA] Blog error:', error.message);
         tracker.done('error', { error: error.message });
         res.status(500).json({ error: 'Failed to find blog posts', details: error.message, blogPosts: [] });
+    }
+});
+
+// ============================================
+// 2b. BLOGS MANUAL: Add a single manual blog URL
+// ============================================
+app.post('/api/blogs/manual', async (req, res) => {
+    const { url, domain = null } = req.body || {};
+    const normalizedUrl = normalizeBlogInputUrl(url);
+    if (!normalizedUrl) return res.status(400).json({ error: 'Valid blog URL is required' });
+    const tracker = createLatencyTracker('blogs_manual', domain || normalizedUrl);
+    const scrapeTimeoutMs = BLOG_SCRAPE_TIMEOUT_MS;
+
+    try {
+        console.log(`[BTA] Manual blog add requested: ${normalizedUrl}`);
+        const scraped = await scrapeFullBlogContent(normalizedUrl, scrapeTimeoutMs);
+
+        const blogPost = {
+            id: `manual-${Date.now()}`,
+            url: normalizedUrl,
+            title: scraped?.title || deriveTitleFromUrl(normalizedUrl),
+            description: scraped?.description || 'Added manually by user.',
+            content: scraped?.content || '',
+            fullContent: scraped?.fullContent || scraped?.content || '',
+            author: scraped?.author || '',
+            date: scraped?.publishDate || null,
+            image: scraped?.image || null,
+            wordCount: scraped?.wordCount || 0,
+            readingTime: scraped?.readingTime || 0,
+            manual: true,
+            source: 'manual'
+        };
+
+        res.json({ status: 'success', blogPost });
+        tracker.done('ok', { scraped: !!scraped, url: normalizedUrl });
+    } catch (error) {
+        console.error('[BTA] Manual blog add failed:', error.message);
+        tracker.done('error', { error: error.message });
+        res.status(500).json({ error: 'Failed to add manual blog URL', details: error.message });
     }
 });
 
@@ -116,7 +289,7 @@ app.post('/api/sitemap', async (req, res) => {
 // ============================================
 // 4. FORM LINK: Generate a shareable link for the client
 // ============================================
-app.post('/api/form/create', (req, res) => {
+app.post('/api/form/create', async (req, res) => {
     const { domain, clientName, clientData, competitors, competitorDetails, blogPosts } = req.body;
     if (!domain) return res.status(400).json({ error: 'Domain is required' });
 
@@ -129,20 +302,40 @@ app.post('/api/form/create', (req, res) => {
         competitorDetails: competitorDetails || {},
         blogPosts: blogPosts || [],
         createdAt: new Date(),
+        expiresAt: new Date(Date.now() + FORM_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString(),
     };
-    formTokens.set(token, tokenData);
+    try {
+        const persisted = await createOnboardingSession({
+            token,
+            domain,
+            clientName: tokenData.clientName,
+            formPayload: tokenData,
+            ttlDays: FORM_TOKEN_TTL_DAYS
+        });
 
-    console.log(`[BTA] Form link created for ${domain} | token: ${token} | clientData: ${clientData ? 'YES (' + Object.keys(clientData).join(',') + ')' : 'NO'} | competitors: ${(competitors || []).length} | competitorDetails: ${Object.keys(competitorDetails || {}).length} | blogPosts: ${(blogPosts || []).length}`);
-
-    res.json({ status: 'success', token });
+        tokenData.persistedRecordId = persisted.recordId;
+        formTokens.set(token, tokenData);
+        console.log(`[BTA] Form link created for ${domain} | token: ${token} | persistedRecordId: ${persisted.recordId} | ttlDays: ${FORM_TOKEN_TTL_DAYS} | clientData: ${clientData ? 'YES (' + Object.keys(clientData).join(',') + ')' : 'NO'} | competitors: ${(competitors || []).length} | competitorDetails: ${Object.keys(competitorDetails || {}).length} | blogPosts: ${(blogPosts || []).length}`);
+        res.json({ status: 'success', token, ttlDays: FORM_TOKEN_TTL_DAYS });
+    } catch (error) {
+        console.error('[BTA] Failed to persist form token in Airtable:', error.message);
+        res.status(500).json({
+            error: 'Failed to create form link',
+            details: `Token persistence failed in Airtable: ${error.message}`
+        });
+    }
 });
 
 // Get form info by token (frontend calls this to show the form)
-app.get('/api/form/:token', (req, res) => {
-    const data = formTokens.get(req.params.token);
-    if (!data) return res.status(404).json({ error: 'Form not found or expired' });
-
-    res.json({ status: 'success', ...data });
+app.get('/api/form/:token', async (req, res) => {
+    try {
+        const resolved = await resolveTokenData(req.params.token);
+        if (!resolved?.tokenData) return res.status(404).json({ error: 'Form not found or expired' });
+        res.json({ status: 'success', ...resolved.tokenData });
+    } catch (error) {
+        console.error('[BTA] Form lookup error:', error.message);
+        res.status(500).json({ error: 'Failed to load form', details: error.message });
+    }
 });
 
 // ============================================
@@ -177,11 +370,12 @@ app.post('/api/research/competitor', async (req, res) => {
 
 // Client submits the form
 app.post('/api/form/:token/submit', async (req, res) => {
-    const tokenData = formTokens.get(req.params.token);
-    if (!tokenData) return res.status(404).json({ error: 'Form not found or expired' });
-
     try {
-        const result = await submitToAirtable({
+        const resolved = await resolveTokenData(req.params.token);
+        const tokenData = resolved?.tokenData;
+        if (!tokenData) return res.status(404).json({ error: 'Form not found or expired' });
+
+        const airtableResult = await submitToAirtable({
             clientData: {
                 domain: tokenData.domain,
                 name: tokenData.clientName,
@@ -193,11 +387,51 @@ app.post('/api/form/:token/submit', async (req, res) => {
             compData: req.body.compData || {},
             sitemapData: req.body.sitemapData || {},
             elevenLabsData: req.body.elevenLabsData || {},
+        }, {
+            existingRecordId: tokenData.persistedRecordId || null,
+            sessionMeta: {
+                kind: 'onboarding_session',
+                token: req.params.token,
+                status: 'COMPLETED',
+                createdAt: tokenData.createdAt ? new Date(tokenData.createdAt).toISOString() : new Date().toISOString(),
+                completedAt: new Date().toISOString(),
+                expiresAt: null
+            },
+            verifyWrite: true
         });
 
         formTokens.delete(req.params.token);
 
-        res.json({ status: 'success', message: 'Data submitted to Airtable', ...result });
+        let notionResult = null;
+        let notionError = null;
+        try {
+            notionResult = await submitToNotion({
+                clientData: {
+                    domain: tokenData.domain,
+                    name: tokenData.clientName,
+                    data: req.body,
+                },
+                competitors: req.body.competitors || [],
+                likedPosts: req.body.likedPosts || [],
+                customUrls: req.body.customUrls || [],
+                compData: req.body.compData || {},
+                sitemapData: req.body.sitemapData || {},
+                elevenLabsData: req.body.elevenLabsData || {},
+            });
+        } catch (error) {
+            notionError = error.message;
+            console.warn('[BTA] Notion submit failed after Airtable success:', error.message);
+        }
+
+        res.json({
+            status: notionError ? 'success_with_notion_pending' : 'success',
+            message: notionError
+                ? 'Saved to Airtable. Notion sync is pending retry.'
+                : 'Saved to Airtable and Notion',
+            finalStatus: notionError ? 'airtable_saved_notion_pending' : 'completed',
+            airtable: airtableResult,
+            notion: notionError ? { success: false, error: notionError } : notionResult
+        });
     } catch (error) {
         console.error('[BTA] Form submit error:', error.message);
         res.status(500).json({ error: 'Failed to submit', details: error.message });
@@ -208,49 +442,72 @@ app.post('/api/form/:token/submit', async (req, res) => {
 // 5. SUBMIT: Direct submit to Airtable (from dashboard)
 // ============================================
 app.post('/api/submit', async (req, res) => {
-    const { clientData, competitors, likedPosts, customUrls, compData, sitemapData, elevenLabsData } = req.body;
+    const { clientData, competitors, likedPosts, customUrls, compData, sitemapData, elevenLabsData, formToken } = req.body;
     if (!clientData) return res.status(400).json({ error: 'Client data is required' });
     const tracker = createLatencyTracker('submit', clientData?.domain || 'unknown');
 
-    console.log(`[BTA] Submitting to Airtable + Notion: ${clientData.domain}`);
+    console.log(`[BTA] Submitting final payload. domain=${clientData.domain} formToken=${formToken ? 'yes' : 'no'}`);
+
+    let resolvedToken = null;
+    if (formToken) {
+        try {
+            resolvedToken = await resolveTokenData(formToken);
+        } catch (error) {
+            console.warn('[BTA] Token resolve failed in /api/submit:', error.message);
+        }
+    }
 
     const submitPayload = { clientData, competitors, likedPosts, customUrls, compData, sitemapData, elevenLabsData };
 
-    // Submit to both Airtable and Notion in parallel
-    const [airtableResult, notionResult] = await Promise.allSettled([
-        submitToAirtable(submitPayload),
-        submitToNotion(submitPayload)
-    ]);
+    try {
+        const airtableResult = await submitToAirtable(submitPayload, {
+            existingRecordId: resolvedToken?.tokenData?.persistedRecordId || null,
+            sessionMeta: formToken
+                ? {
+                    kind: 'onboarding_session',
+                    token: formToken,
+                    status: 'COMPLETED',
+                    createdAt: resolvedToken?.tokenData?.createdAt
+                        ? new Date(resolvedToken.tokenData.createdAt).toISOString()
+                        : new Date().toISOString(),
+                    completedAt: new Date().toISOString(),
+                    expiresAt: null
+                }
+                : null,
+            verifyWrite: true
+        });
 
-    const response = {
-        status: 'success',
-        airtable: airtableResult.status === 'fulfilled'
-            ? airtableResult.value
-            : { error: airtableResult.reason?.message || 'Airtable failed' },
-        notion: notionResult.status === 'fulfilled'
-            ? notionResult.value
-            : { error: notionResult.reason?.message || 'Notion failed' }
-    };
+        let notionResult = null;
+        let notionError = null;
+        try {
+            notionResult = await submitToNotion(submitPayload);
+        } catch (error) {
+            notionError = error.message;
+            console.warn('[BTA] Notion submit failed (non-blocking):', error.message);
+        }
 
-    // Log results
-    console.log(`[BTA] Airtable: ${airtableResult.status}`);
-    console.log(`[BTA] Notion: ${notionResult.status}`);
+        if (formToken) {
+            formTokens.delete(formToken);
+        }
 
-    // Return success even if one failed (data is preserved in the other)
-    if (airtableResult.status === 'rejected' && notionResult.status === 'rejected') {
-        tracker.done('error', { airtable: 'rejected', notion: 'rejected' });
+        tracker.done('ok', {
+            airtable: 'fulfilled',
+            airtableVerified: airtableResult.verified,
+            notion: notionError ? 'rejected' : 'fulfilled'
+        });
+        return res.json({
+            status: notionError ? 'success_with_notion_pending' : 'success',
+            finalStatus: notionError ? 'airtable_saved_notion_pending' : 'completed',
+            airtable: airtableResult,
+            notion: notionError ? { success: false, error: notionError } : notionResult
+        });
+    } catch (error) {
+        tracker.done('error', { airtable: 'rejected', error: error.message });
         return res.status(500).json({
-            error: 'Both destinations failed',
-            airtable: response.airtable,
-            notion: response.notion
+            error: 'Airtable submission failed',
+            details: error.message
         });
     }
-
-    tracker.done('ok', {
-        airtable: airtableResult.status,
-        notion: notionResult.status
-    });
-    res.json(response);
 });
 
 // ============================================
@@ -314,14 +571,16 @@ app.get('/api/elevenlabs/session', async (req, res) => {
 // 9. ELEVENLABS CONTEXT: Provide full context for voice calls
 // Variables match the ElevenLabs prompt: client_name, client_context, competitor_summary
 // ============================================
-app.get('/api/elevenlabs/context/:token', (req, res) => {
-    const data = formTokens.get(req.params.token);
-    if (!data) {
-        return res.status(404).json({ error: 'Form not found or expired' });
-    }
+app.get('/api/elevenlabs/context/:token', async (req, res) => {
+    try {
+        const resolved = await resolveTokenData(req.params.token);
+        const data = resolved?.tokenData;
+        if (!data) {
+            return res.status(404).json({ error: 'Form not found or expired' });
+        }
 
-    const clientData = data.clientData || {};
-    const competitors = data.competitors || [];
+        const clientData = data.clientData || {};
+        const competitors = data.competitors || [];
 
     // Access data from clientData.data (new structure after research rewrite)
     const d = clientData.data || clientData;
@@ -424,16 +683,20 @@ app.get('/api/elevenlabs/context/:token', (req, res) => {
         console.log(`[ElevenLabs] Warning: competitor_summary truncated to 6000 chars`);
     }
 
-    const context = {
-        client_name: d.name || clientData.name || data.clientName || data.domain,
-        client_context: clientContext,
-        competitor_summary: competitorSummary
-    };
+        const context = {
+            client_name: d.name || clientData.name || data.clientName || data.domain,
+            client_context: clientContext,
+            competitor_summary: competitorSummary
+        };
 
-    console.log(`[ElevenLabs] Context for ${context.client_name}: ${contextLines.length} data points, ${competitors.length} competitors`);
-    console.log(`[ElevenLabs] Sizes - client_context: ${clientContext.length} chars, competitor_summary: ${competitorSummary.length} chars`);
+        console.log(`[ElevenLabs] Context for ${context.client_name}: ${contextLines.length} data points, ${competitors.length} competitors`);
+        console.log(`[ElevenLabs] Sizes - client_context: ${clientContext.length} chars, competitor_summary: ${competitorSummary.length} chars`);
 
-    res.json(context);
+        res.json(context);
+    } catch (error) {
+        console.error('[BTA] ElevenLabs context error:', error.message);
+        res.status(500).json({ error: 'Failed to build ElevenLabs context', details: error.message });
+    }
 });
 
 // ============================================

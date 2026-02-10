@@ -14,7 +14,11 @@ function paragraph(text, label = null) {
             type: 'paragraph',
             paragraph: {
                 rich_text: [
-                    { text: { content: `${label}: `, annotations: { bold: true } } },
+                    {
+                        type: 'text',
+                        text: { content: `${label}: ` },
+                        annotations: { bold: true }
+                    },
                     { text: { content: text || 'Not available' } }
                 ]
             }
@@ -301,6 +305,7 @@ async function submitToNotion(data) {
     // ==========================================
     // KNOWN LIMITATIONS
     // ==========================================
+    const limitations = Array.isArray(clientScraped.limitations) ? clientScraped.limitations : [];
     if (limitations.length > 0) {
         children.push(divider(), heading(2, '⚠️', `Known Limitations (${limitations.length})`));
         for (const limitation of limitations) {
@@ -633,12 +638,21 @@ async function submitToNotion(data) {
             children
         });
 
+        let verified = false;
+        try {
+            const check = await notion.pages.retrieve({ page_id: response.id });
+            verified = Boolean(check?.id === response.id);
+        } catch (verifyError) {
+            console.warn('[Notion] Write verification failed:', verifyError.message);
+        }
+
         console.log(`[Notion] Document created successfully: ${response.id}`);
         return {
             success: true,
             pageId: response.id,
             url: response.url,
-            blocks: children.length
+            blocks: children.length,
+            verified
         };
     } catch (error) {
         console.error('[Notion] Error creating document:', error.message);
