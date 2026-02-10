@@ -1,4 +1,5 @@
 const OpenAI = require("openai");
+const { GoogleGenAI } = require("@google/genai");
 const axios = require("axios");
 const cheerio = require("cheerio");
 
@@ -376,6 +377,45 @@ function looksPromotional(post) {
     return patterns.some((pattern) => pattern.test(text));
 }
 
+function mapAiBlogCandidates(parsed, limit) {
+    if (!parsed?.blogPosts?.length) return [];
+    const validPosts = parsed.blogPosts.filter((p) => {
+        const url = String(p?.url || "").toLowerCase();
+        if (!url) return false;
+        const excludePatterns = [
+            '/product', '/products', '/pricing', '/demo', '/features',
+            '/landing', '/buy', '/cart', '/checkout', '/signup',
+            '/login', '/contact', '/about', '/careers', '/jobs',
+            '/api', '/docs', '/documentation', '/help', '/support',
+            '/privacy', '/terms', '/legal', '/security', '/status',
+            '/integrations', '/partners', '/customers', '/company'
+        ];
+        if (excludePatterns.some((pat) => url.includes(pat))) return false;
+
+        try {
+            const path = new URL(p.url).pathname;
+            if (path === '/' || path === '') return false;
+            const slug = path.split('/').filter(Boolean).pop() || '';
+            if (!(slug.includes('-') && slug.length > 10)) return false;
+        } catch {
+            return false;
+        }
+
+        if (looksPromotional(p)) return false;
+        return true;
+    });
+
+    return validPosts.slice(0, limit).map((p, i) => ({
+        id: i + 1,
+        url: normalizeUrl(p.url),
+        title: p.title || safeDecodeSlug(p.url),
+        date: p.date || null,
+        description: p.description || "",
+        popularity: p.popularity || "medium",
+        image: null
+    }));
+}
+
 // ============================================
 // SCRAPE FULL BLOG CONTENT
 // ============================================
@@ -576,50 +616,86 @@ If no articles found, return: {"blogPosts": []}`
         console.log(`[Blog] OpenAI response received`);
 
         const parsed = extractJson(content);
-        if (parsed?.blogPosts?.length > 0) {
-            // RELAXED filtering: Accept URLs that look like editorial content
-            // (long slugs with words, not product pages)
-            const validPosts = parsed.blogPosts.filter(p => {
-                const url = p.url.toLowerCase();
-                // Exclude obvious non-blog patterns
-                const excludePatterns = [
-                    '/product', '/products', '/pricing', '/demo', '/features',
-                    '/landing', '/buy', '/cart', '/checkout', '/signup',
-                    '/login', '/contact', '/about', '/careers', '/jobs',
-                    '/api', '/docs', '/documentation', '/help', '/support',
-                    '/privacy', '/terms', '/legal', '/security', '/status',
-                    '/integrations', '/partners', '/customers', '/company'
-                ];
-                if (excludePatterns.some(pat => url.includes(pat))) return false;
-                
-                // Must have a path (not just domain.com/)
-                const path = new URL(p.url).pathname;
-                if (path === '/' || path === '') return false;
-                
-                // Should look like an article slug (has words separated by dashes)
-                const slug = path.split('/').filter(Boolean).pop() || '';
-                if (!(slug.includes('-') && slug.length > 10)) return false;
-                if (looksPromotional(p)) return false;
-                return true;
-            });
-            
-            console.log(`[Blog] OpenAI found ${validPosts.length} valid EDITORIAL items (filtered from ${parsed.blogPosts.length})`);
-
-            return validPosts.slice(0, limit).map((p, i) => ({
-                id: i + 1,
-                url: normalizeUrl(p.url),
-                title: p.title || safeDecodeSlug(p.url),
-                date: p.date || null,
-                description: p.description || "",
-                popularity: p.popularity || "medium",
-                image: null // Will be scraped later
-            }));
+        const mapped = mapAiBlogCandidates(parsed, limit);
+        if (mapped.length > 0) {
+            console.log(`[Blog] OpenAI found ${mapped.length} valid EDITORIAL items (filtered from ${parsed?.blogPosts?.length || 0})`);
+            return mapped;
         }
 
         console.log("[Blog] OpenAI found no editorial content");
         return [];
     } catch (error) {
         console.log(`[Blog] OpenAI failed: ${error.message}`);
+        return [];
+    }
+}
+
+// ============================================
+// STRATEGY 2: Gemini with Google Search (Fallback)
+// ============================================
+async function findBlogsWithGemini(domain, limit = 10) {
+    if (!process.env.GOOGLE_API_KEY) {
+        console.log("[Blog] No GOOGLE_API_KEY, skipping Gemini");
+        return [];
+    }
+
+    try {
+        console.log(`[Blog] Using Gemini web search to find top ${limit} blogs for ${domain}...`);
+        const maxAgeMonths = BLOG_MAX_AGE_MONTHS;
+        const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: `Find ${limit} REAL editorial articles, blog posts, or guides published on ${domain}.
+
+IMPORTANT SEARCH STRATEGY:
+Use these web searches:
+- site:${domain} "how to"
+- site:${domain} "explained"
+- site:${domain} "guide"
+- site:${domain} "why"
+- site:${domain} "what is"
+- site:${domain} "vs" OR "versus"
+- site:${domain} "best"
+- site:${domain} "tips"
+
+WHAT TO LOOK FOR:
+- Long, descriptive editorial slugs
+- Articles/guides with actionable depth
+- Prefer content published within the last ${maxAgeMonths} months when available
+- Favor canonical article links
+- Exclude product pages, pricing, demos, changelog, and landing pages
+
+Return only valid JSON:
+{
+  "blogPosts": [
+    {
+      "url": "https://${domain}/example-article-slug",
+      "title": "Article Title",
+      "description": "Brief description",
+      "date": "ISO or human readable date if available"
+    }
+  ]
+}
+
+If no articles found, return {"blogPosts": []}.`,
+            config: { tools: [{ googleSearch: {} }] }
+        });
+
+        const responseText = response.text ||
+            response.candidates?.[0]?.content?.parts?.[0]?.text ||
+            response.response?.text?.() ||
+            "";
+        console.log("[Blog] Gemini response received");
+        const parsed = extractJson(responseText);
+        const mapped = mapAiBlogCandidates(parsed, limit);
+        if (mapped.length > 0) {
+            console.log(`[Blog] Gemini found ${mapped.length} valid EDITORIAL items (filtered from ${parsed?.blogPosts?.length || 0})`);
+            return mapped;
+        }
+        console.log("[Blog] Gemini found no editorial content");
+        return [];
+    } catch (error) {
+        console.log(`[Blog] Gemini failed: ${error.message}`);
         return [];
     }
 }
@@ -991,10 +1067,17 @@ async function getBlogPosts(domain, limit = 10) {
     posts = await findBlogsWithOpenAI(domain, limit);
     console.log(`[Blog] OpenAI found ${posts.length} blog posts`);
 
-    // STRATEGY 2: Direct scraping + Sitemap (fallback)
+    // STRATEGY 2: Gemini web search fallback
+    if (posts.length === 0) {
+        console.log("[Blog] Step 2: Using Gemini web search fallback...");
+        posts = await findBlogsWithGemini(domain, limit);
+        console.log(`[Blog] Gemini found ${posts.length} blog posts`);
+    }
+
+    // STRATEGY 3: Direct scraping + Sitemap (fallback)
     // Traditional crawling for sites with clear blog structure
     if (posts.length === 0) {
-        console.log("[Blog] Step 2: Trying sitemap and page scraping...");
+        console.log("[Blog] Step 3: Trying sitemap and page scraping...");
         const scrapedPosts = await findBlogsFromScraping(domain, limit);
         
         if (scrapedPosts.length > 0) {
@@ -1003,10 +1086,10 @@ async function getBlogPosts(domain, limit = 10) {
         }
     }
 
-    // STRATEGY 3: Puppeteer for JS-rendered pages (Next.js, React apps)
+    // STRATEGY 4: Puppeteer for JS-rendered pages (Next.js, React apps)
     // Use when nothing else worked (likely a dynamic SPA)
     if (posts.length === 0 && puppeteer) {
-        console.log("[Blog] Step 3: Trying Puppeteer for JS-rendered content...");
+        console.log("[Blog] Step 4: Trying Puppeteer for JS-rendered content...");
         const puppeteerPosts = await findBlogsWithPuppeteer(domain, limit);
         
         if (puppeteerPosts.length > 0) {
