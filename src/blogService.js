@@ -2,9 +2,18 @@ const OpenAI = require("openai");
 const axios = require("axios");
 const cheerio = require("cheerio");
 
+// Puppeteer for JS-rendered pages (optional, loaded dynamically)
+let puppeteer = null;
+try {
+    puppeteer = require("puppeteer");
+} catch {
+    console.log("[Blog] Puppeteer not available, using Cheerio only");
+}
+
 // ============================================
-// AI-POWERED BLOG DISCOVERY + FULL CONTENT SCRAPING
-// Finds top 10 most popular/recent blogs and scrapes full content
+// AI-POWERED EDITORIAL CONTENT DISCOVERY + FULL CONTENT SCRAPING
+// Finds top 10 editorial articles, thought leadership, and guides
+// Works even when companies don't have a formal /blog section
 // ============================================
 
 // URLs to exclude - not actual blog posts
@@ -39,16 +48,55 @@ const EXCLUDED_PATTERNS = [
     /\/about$/i,
     /\/pricing$/i,
     /\/features$/i,
-    /\/demo$/i
+    /\/demo$/i,
+    /\/product/i,           // Product pages
+    /\/products/i,          // Product listings
+    /\/landing/i,           // Landing pages
+    /\/partnerships/i,      // Partnership pages
+    /\/partners/i,          // Partner pages
+    /\/integrations/i,      // Integration pages
+    /\/solutions/i,         // Solution pages
+    /\/use-cases/i,         // Use case pages
+    /\/case-studies/i,      // Case study pages (different from blog)
+    /\/customers/i,         // Customer pages
+    /\/company/i,           // Company pages
+    /\/careers/i,           // Career pages
+    /\/jobs/i,              // Job listings
+    /\/events/i,            // Event pages
+    /\/webinars/i,          // Webinar pages
+    /\/podcasts/i,          // Podcast pages (unless blog format)
+    /\/videos/i,            // Video pages
+    /\/download/i,          // Download pages
+    /\/get-started/i,       // Onboarding pages
+    /\/start/i,             // Start pages
+    /\/try/i,               // Trial pages
+    /\/buy/i,               // Buy pages
+    /\/order/i,             // Order pages
+    /\/api/i,               // API docs
+    /\/docs/i,              // Documentation
+    /\/documentation/i,     // Documentation
+    /\/help/i,              // Help center
+    /\/support/i,           // Support pages
+    /\/status/i,            // Status pages
+    /\/security/i,          // Security pages
+    /\/legal/i,             // Legal pages
+    /\/gdpr/i,              // GDPR pages
+    /\/ccpa/i,              // CCPA pages
+    /\/changelog/i,         // Changelog (different format)
+    /\/releases/i,          // Release notes
+    /\/roadmap/i            // Roadmap pages
 ];
 
-function isValidBlogUrl(url) {
-    // Must have a path with at least one slug segment
+/**
+ * Check if URL structure indicates it's likely a blog post
+ * STRICT mode: Only accept URLs that look like editorial content
+ */
+function isValidBlogUrl(url, strict = true) {
     try {
         const parsed = new URL(url);
-        const pathname = parsed.pathname;
+        const pathname = parsed.pathname.toLowerCase();
 
-        // Check against excluded patterns
+        // Check against excluded patterns first
         for (const pattern of EXCLUDED_PATTERNS) {
             if (pattern.test(url)) {
                 return false;
@@ -60,15 +108,50 @@ function isValidBlogUrl(url) {
 
         const lastSegment = segments[segments.length - 1];
 
+        // STRICT MODE (default): Only accept URLs with clear blog indicators
+        // This avoids product pages, landing pages, etc.
+        if (strict) {
+            // Must have /blog/, /resources/, /insights/, /articles/, /posts/, /news/, /guides/ in path
+            const blogPathIndicators = [
+                'blog', 'blogs', 'resources', 'insights', 'articles', 'posts', 
+                'news', 'guides', 'stories', 'journal', 'library', 'learn',
+                'knowledge-base', 'thoughts', 'content', 'writing', 'updates'
+            ];
+            
+            const hasBlogPath = segments.some(s => blogPathIndicators.includes(s));
+            
+            if (!hasBlogPath) {
+                return false;
+            }
+
+            // Must have a meaningful slug after the blog indicator
+            // The slug should look like an article title (has dashes, reasonable length)
+            if (!lastSegment.includes('-') || lastSegment.length < 10) {
+                return false;
+            }
+
+            // Extra check: avoid slugs that look like product/feature names
+            // (single words or very short phrases without context)
+            const wordCount = lastSegment.split('-').length;
+            if (wordCount < 3 && lastSegment.length < 20) {
+                // Could be a product name like "data-pipelines" or "command-center"
+                // Require additional confirmation via hasBlogArticleMetadata
+                return 'maybe'; // Needs content validation
+            }
+
+            return true;
+        }
+
+        // NON-STRICT MODE (fallback): More lenient matching
+        // Only use this if we already know the page has blog-like content
+        
         // If path contains blog/article/post indicator, be more lenient
         const blogIndicators = ['blog', 'post', 'posts', 'article', 'articles', 'news', 'insights', 'resources',
             'knowledge-base', 'learn', 'thoughts', 'library', 'guides', 'stories', 'updates', 'journal', 'content', 'ideas', 'writing'];
-        const hasBlogIndicator = segments.some(s => blogIndicators.includes(s.toLowerCase()));
+        const hasBlogIndicator = segments.some(s => blogIndicators.includes(s));
 
-        // If we have a blog indicator and at least one more segment, accept it
         if (hasBlogIndicator && segments.length >= 2) {
-            // Last segment should look like a slug (has dash, underscore, or >5 chars)
-            if (lastSegment.includes('-') || lastSegment.includes('_') || lastSegment.length > 5) {
+            if (lastSegment.includes('-') || lastSegment.length > 5) {
                 return true;
             }
         }
@@ -80,15 +163,45 @@ function isValidBlogUrl(url) {
             }
         }
 
-        // Accept any path with a meaningful slug (contains dash and is reasonably long)
-        if (lastSegment.includes('-') && lastSegment.length > 8) {
-            return true;
-        }
-
         return false;
     } catch {
         return false;
     }
+}
+
+/**
+ * Validate that scraped content looks like a real blog post
+ * Returns true if content has blog-like characteristics (date, author, article structure)
+ */
+function isBlogContent($) {
+    // Check for blog-specific HTML structure
+    const hasArticleTag = $('article').length > 0;
+    const hasBlogPostClass = $('[class*="blog-post"], [class*="post-content"], [class*="article-content"]').length > 0;
+    
+    // Check for blog metadata
+    const hasPublishDate = $('meta[property="article:published_time"], meta[name="publish_date"], time[datetime]').length > 0;
+    const hasAuthor = $('meta[name="author"], [rel="author"], .author, .byline').length > 0;
+    
+    // Check for blog-specific meta tags
+    const ogType = $('meta[property="og:type"]').attr('content');
+    const isArticle = ogType === 'article';
+    
+    // Word count check (blogs usually have substantial content)
+    const textContent = $('article, .post-content, .entry-content, main').text() || $('body').text();
+    const wordCount = textContent.trim().split(/\s+/).length;
+    const hasSubstantialContent = wordCount > 300;
+    
+    // Scoring system
+    let score = 0;
+    if (hasArticleTag) score += 2;
+    if (hasBlogPostClass) score += 2;
+    if (hasPublishDate) score += 2;
+    if (hasAuthor) score += 1;
+    if (isArticle) score += 2;
+    if (hasSubstantialContent) score += 1;
+    
+    // Need at least 3 points to be considered a blog post
+    return score >= 3;
 }
 
 function safeDecodeSlug(url) {
@@ -147,14 +260,97 @@ function normalizeUrl(url) {
     }
 }
 
+function isLikelyBlogPost(url) {
+    const validation = isValidBlogUrl(url, false);
+    if (validation === true) return true;
+    if (validation === 'maybe') return true;
+    try {
+        const parsed = new URL(url);
+        const slug = parsed.pathname.split('/').filter(Boolean).pop() || '';
+        return slug.includes('-') && slug.length >= 12;
+    } catch {
+        return false;
+    }
+}
+
+function parsePublishedDate(value) {
+    if (!value) return null;
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+
+    const cleaned = String(value).trim();
+    const normalized = cleaned
+        .replace(/(\d{1,2})(st|nd|rd|th)/gi, '$1')
+        .replace(/\s+/g, ' ');
+    const parsedNormalized = new Date(normalized);
+    if (!Number.isNaN(parsedNormalized.getTime())) return parsedNormalized;
+    return null;
+}
+
+function isWithinMaxAgeMonths(dateValue, maxAgeMonths) {
+    const publishedDate = parsePublishedDate(dateValue);
+    if (!publishedDate) return true; // Keep unknown dates; only filter when date is known.
+
+    const threshold = new Date();
+    threshold.setMonth(threshold.getMonth() - maxAgeMonths);
+    return publishedDate >= threshold;
+}
+
+/**
+ * Calculate editorial content score for a URL
+ * Returns score 0-4 based on editorial signals
+ */
+function calculateEditorialScore(url, wordCount = null) {
+    let score = 0;
+    const urlLower = url.toLowerCase();
+    const slug = url.split('/').filter(Boolean).pop() || '';
+    
+    // 1. Slug length > 30 chars (editorial slugs are descriptive)
+    if (slug.length > 30) score++;
+    
+    // 2. Contains editorial keywords
+    const editorialKeywords = ['how', 'why', 'what', 'guide', 'insights', 'explained', 'vs', 'versus', 'best', 'tips', 'ultimate', 'complete'];
+    if (editorialKeywords.some(kw => slug.includes(kw))) score++;
+    
+    // 3. Word count > 500 (substantial content)
+    if (wordCount && wordCount > 500) score++;
+    
+    // 4. No product/commercial patterns
+    const commercialPatterns = ['/product', '/pricing', '/demo', '/buy', '/cart', '/checkout'];
+    if (!commercialPatterns.some(pat => urlLower.includes(pat))) score++;
+    
+    return score;
+}
+
+/**
+ * Check if URL passes minimum editorial quality threshold
+ * Requires 3 of 4 signals to pass
+ */
+function isQualityEditorialContent(url, wordCount = null) {
+    const score = calculateEditorialScore(url, wordCount);
+    return score >= 3; // Need 3 of 4 signals
+}
+
 // ============================================
 // SCRAPE FULL BLOG CONTENT
 // ============================================
 async function scrapeFullBlogContent(url) {
     try {
         console.log(`[Blog] Scraping full content: ${url}`);
+        
+        // Basic validation - exclude obvious non-content URLs
+        const excludePatterns = [
+            '/product', '/products', '/pricing', '/demo', '/features',
+            '/landing', '/buy', '/cart', '/checkout', '/signup',
+            '/login', '/api', '/docs', '/documentation'
+        ];
+        if (excludePatterns.some(pat => url.toLowerCase().includes(pat))) {
+            console.log(`[Blog] URL looks like a product/service page: ${url}`);
+            return null;
+        }
+        
         const { data } = await axios.get(url, {
-            timeout: 15000,
+            timeout: 8000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
@@ -285,32 +481,45 @@ async function findBlogsWithOpenAI(domain, limit = 10) {
         const response = await openai.responses.create({
             model: "gpt-4o",
             tools: [{ type: "web_search" }],
-            input: `Find ${limit} REAL blog posts or articles published on ${domain}.
+            input: `Find ${limit} REAL editorial articles, blog posts, or guides published on ${domain}.
 
-Search for: site:${domain}/blog OR site:${domain}/resources OR site:${domain}/insights
+IMPORTANT SEARCH STRATEGY:
+Use these Google search operators to find articles:
+- site:${domain} "how to"
+- site:${domain} "explained"  
+- site:${domain} "guide"
+- site:${domain} "why"
+- site:${domain} "what is"
+- site:${domain} "vs" OR "versus"
+- site:${domain} "best"
+- site:${domain} "tips"
 
-IMPORTANT: 
-- Return ONLY actual article/blog post URLs (not category pages, tag pages, or sitemaps)
-- URLs should be individual articles with slugs like "/blog/article-name"
-- Do NOT include URLs ending in /blog/, /resources/, /category/, /tag/, /author/
+WHAT TO LOOK FOR:
+- Articles with LONG, DESCRIPTIVE SLUGS (e.g., "/how-to-automate-leasing-communications")
+- Editorial content that teaches, explains, or compares
+- Thought leadership pieces
+- NOT product pages, pricing, demos, or landing pages
+- URLs WITHOUT: /product, /pricing, /demo, /features, /landing, /buy
+
+These might be "orphaned" articles not linked from main navigation - that's OK.
 
 For each REAL article found:
 - The exact full URL
 - The article title
-- A brief description of what the article is about
+- A brief description of what it's about
 
 Respond with JSON:
 {
     "blogPosts": [
         {
-            "url": "https://${domain}/blog/example-article-title",
-            "title": "Example Article Title",
-            "description": "Brief description of the article content"
+            "url": "https://${domain}/example-article-slug",
+            "title": "Article Title",
+            "description": "Brief description"
         }
     ]
 }
 
-If no blog posts found, return: {"blogPosts": []}`
+If no articles found, return: {"blogPosts": []}`
         });
 
         const content = response.output_text || "";
@@ -318,9 +527,31 @@ If no blog posts found, return: {"blogPosts": []}`
 
         const parsed = extractJson(content);
         if (parsed?.blogPosts?.length > 0) {
-            // Filter valid URLs
-            const validPosts = parsed.blogPosts.filter(p => isValidBlogUrl(p.url));
-            console.log(`[Blog] OpenAI found ${validPosts.length} valid blog posts (filtered from ${parsed.blogPosts.length})`);
+            // RELAXED filtering: Accept URLs that look like editorial content
+            // (long slugs with words, not product pages)
+            const validPosts = parsed.blogPosts.filter(p => {
+                const url = p.url.toLowerCase();
+                // Exclude obvious non-blog patterns
+                const excludePatterns = [
+                    '/product', '/products', '/pricing', '/demo', '/features',
+                    '/landing', '/buy', '/cart', '/checkout', '/signup',
+                    '/login', '/contact', '/about', '/careers', '/jobs',
+                    '/api', '/docs', '/documentation', '/help', '/support',
+                    '/privacy', '/terms', '/legal', '/security', '/status',
+                    '/integrations', '/partners', '/customers', '/company'
+                ];
+                if (excludePatterns.some(pat => url.includes(pat))) return false;
+                
+                // Must have a path (not just domain.com/)
+                const path = new URL(p.url).pathname;
+                if (path === '/' || path === '') return false;
+                
+                // Should look like an article slug (has words separated by dashes)
+                const slug = path.split('/').filter(Boolean).pop() || '';
+                return slug.includes('-') && slug.length > 10;
+            });
+            
+            console.log(`[Blog] OpenAI found ${validPosts.length} valid EDITORIAL items (filtered from ${parsed.blogPosts.length})`);
 
             return validPosts.slice(0, limit).map((p, i) => ({
                 id: i + 1,
@@ -333,7 +564,7 @@ If no blog posts found, return: {"blogPosts": []}`
             }));
         }
 
-        console.log("[Blog] OpenAI found no blogs");
+        console.log("[Blog] OpenAI found no editorial content");
         return [];
     } catch (error) {
         console.log(`[Blog] OpenAI failed: ${error.message}`);
@@ -402,10 +633,12 @@ async function findBlogsFromScraping(domain, limit = 10) {
                         return;
                     }
 
-                    // Validate it's a real blog URL
-                    if (isValidBlogUrl(href)) {
+                    // Validate it's a real blog URL (strict mode)
+                    const validation = isValidBlogUrl(href, true);
+                    if (validation === true) {
                         urls.add(href);
                     }
+                    // 'maybe' URLs will be validated later when scraping content
                 });
             }
 
@@ -443,19 +676,25 @@ async function findBlogsFromScraping(domain, limit = 10) {
                 for (const ref of sitemapRefs.slice(0, 3)) { // Limit to 3 child sitemaps
                     const childUrl = ref.replace(/<\/?loc>/gi, "");
                     const contentKeywords = ['blog', 'post', 'article', 'news', 'insight', 'resource', 'page', 'content'];
-                    if (contentKeywords.some(kw => childUrl.toLowerCase().includes(kw))) {
-                        try {
-                            console.log(`[Blog] Fetching child sitemap: ${childUrl}`);
-                            const childRes = await axios.get(childUrl, { timeout: 8000 });
-                            const childMatches = childRes.data.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
-                            for (const m of childMatches) {
-                                const url = m.replace(/<\/?loc>/gi, "");
-                                if (isValidBlogUrl(url)) {
+                    // For post-sitemap.xml, use RELAXED filtering (WordPress posts don't have /blog/ in URL)
+                    const isPostSitemap = childUrl.toLowerCase().includes('post');
+                    
+                    try {
+                        console.log(`[Blog] Fetching child sitemap: ${childUrl}`);
+                        const childRes = await axios.get(childUrl, { timeout: 8000 });
+                        const childMatches = childRes.data.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
+                        for (const m of childMatches) {
+                            const url = m.replace(/<\/?loc>/gi, "");
+                            // For post-sitemaps, use relaxed validation (WordPress structure)
+                            if (isPostSitemap) {
+                                if (isLikelyBlogPost(url)) {
                                     urls.add(url);
                                 }
+                            } else if (isValidBlogUrl(url, true) === true) {
+                                urls.add(url);
                             }
-                        } catch { }
-                    }
+                        }
+                    } catch { }
                 }
 
                 // Also check direct URLs in this sitemap
@@ -464,14 +703,14 @@ async function findBlogsFromScraping(domain, limit = 10) {
                     const url = m.replace(/<\/?loc>/gi, "");
                     // Skip sitemap references themselves
                     if (url.endsWith('.xml')) continue;
-                    // Use our validation to check if it's a blog-like URL
-                    if (isValidBlogUrl(url)) {
+                    // Use strict validation to check if it's a blog-like URL
+                    if (isValidBlogUrl(url, true) === true) {
                         urls.add(url);
                     }
                 }
 
                 if (urls.size >= limit) {
-                    console.log(`[Blog] Sitemap found ${urls.size} valid URLs`);
+                    console.log(`[Blog] Sitemap found ${urls.size} valid editorial URLs`);
                     break;
                 }
             } catch (err) {
@@ -480,11 +719,148 @@ async function findBlogsFromScraping(domain, limit = 10) {
         }
 
         if (urls.size > 0) {
-            console.log(`[Blog] Sitemaps found total of ${urls.size} valid URLs`);
+            console.log(`[Blog] Sitemaps found total of ${urls.size} valid editorial URLs`);
         }
     }
 
-    console.log(`[Blog] Total valid blog URLs found: ${urls.size}`);
+    console.log(`[Blog] Total valid editorial URLs found: ${urls.size}`);
+
+    return [...urls].slice(0, limit).map((url, i) => ({
+        id: i + 1,
+        url,
+        title: safeDecodeSlug(url),
+        date: null,
+        description: "",
+        popularity: "unknown",
+        image: null
+    }));
+}
+
+// ============================================
+// STRATEGY 3: Puppeteer for JS-rendered pages (Next.js, React, etc.)
+// ============================================
+async function findBlogsWithPuppeteer(domain, limit = 10) {
+    if (!puppeteer) {
+        console.log("[Blog] Puppeteer not available, skipping");
+        return [];
+    }
+
+    const urls = new Set();
+    let browser = null;
+
+    try {
+        console.log(`[Blog] Starting Puppeteer for ${domain}...`);
+        
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+
+        const page = await browser.newPage();
+        
+        // Set user agent to avoid detection
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        // Try /blog first
+        const blogUrl = `https://${domain}/blog`;
+        console.log(`[Blog] Puppeteer navigating to: ${blogUrl}`);
+        
+        try {
+            await page.goto(blogUrl, { 
+                waitUntil: 'networkidle2', 
+                timeout: 30000 
+            });
+            
+            // Wait for content to load (common selectors for blog posts)
+            await page.waitForFunction(() => {
+                return document.querySelectorAll('article, [class*="post"], [class*="blog"], h2 a, h3 a').length > 0;
+            }, { timeout: 10000 }).catch(() => {
+                console.log("[Blog] No content selectors found, proceeding anyway...");
+            });
+
+            // Wait a bit more for any lazy-loaded content
+            await new Promise(r => setTimeout(r, 2000));
+
+        } catch (navError) {
+            console.log(`[Blog] Puppeteer navigation error: ${navError.message}`);
+            await browser.close();
+            return [];
+        }
+
+        // Extract links using page.evaluate
+        const links = await page.evaluate((domain) => {
+            const results = [];
+            
+            // Try multiple selectors to find article links
+            const selectors = [
+                'article a[href]',
+                '[class*="post"] a[href]',
+                '[class*="blog"] a[href]',
+                '[class*="article"] a[href]',
+                'h2 a[href]',
+                'h3 a[href]',
+                '.card a[href]',
+                'a[href*="/blog/"]',
+                'a[href*="/post/"]',
+                'a[href*="/article/"]',
+                'main a[href]',
+                '[role="main"] a[href]'
+            ];
+            
+            for (const selector of selectors) {
+                document.querySelectorAll(selector).forEach(el => {
+                    const href = el.getAttribute('href');
+                    if (href) {
+                        // Make absolute URL
+                        let absoluteUrl = href;
+                        if (href.startsWith('/')) {
+                            absoluteUrl = `https://${domain}${href}`;
+                        } else if (!href.startsWith('http')) {
+                            return;
+                        }
+                        
+                        // Filter out common non-article paths
+                        const skipPatterns = [
+                            '/tag/', '/category/', '/author/', '/page/',
+                            '/wp-content/', '/wp-admin/', '/cdn-cgi/',
+                            '/assets/', '/static/', '/api/', '/_next/',
+                            '#', '/search', '/login', '/signup', '/cart',
+                            '/checkout', '/account', '/privacy', '/terms'
+                        ];
+                        
+                        const isValid = !skipPatterns.some(p => absoluteUrl.includes(p));
+                        const hasArticleSlug = absoluteUrl.split('/').pop()?.length > 10 ||
+                                               absoluteUrl.split('/').pop()?.includes('-');
+                        
+                        if (isValid && hasArticleSlug) {
+                            results.push(absoluteUrl);
+                        }
+                    }
+                });
+            }
+            
+            return [...new Set(results)];
+        }, domain);
+
+        console.log(`[Blog] Puppeteer found ${links.length} raw links`);
+        
+        // Filter and validate URLs (strict mode)
+        for (const url of links) {
+            if (isValidBlogUrl(url, true) === true) {
+                urls.add(url);
+            }
+            if (urls.size >= limit) break;
+        }
+
+        console.log(`[Blog] Puppeteer found ${urls.size} valid editorial URLs`);
+
+    } catch (error) {
+        console.error(`[Blog] Puppeteer error: ${error.message}`);
+    } finally {
+        if (browser) {
+            await browser.close();
+        }
+    }
 
     return [...urls].slice(0, limit).map((url, i) => ({
         id: i + 1,
@@ -504,55 +880,80 @@ async function verifyUrls(posts) {
     if (posts.length === 0) return [];
 
     console.log(`[Blog] Verifying ${posts.length} URLs...`);
-    const verified = [];
-
-    for (const post of posts) {
-        try {
-            const response = await axios.head(post.url, {
+    const checks = await Promise.allSettled(
+        posts.map((post) =>
+            axios.head(post.url, {
                 timeout: 5000,
                 maxRedirects: 3,
                 validateStatus: (s) => s >= 200 && s < 400
-            });
-            verified.push(post);
-        } catch {
-            console.log(`[Blog] Skipped (not accessible): ${post.url}`);
+            })
+        )
+    );
+    const verified = [];
+    checks.forEach((check, idx) => {
+        if (check.status === 'fulfilled') {
+            verified.push(posts[idx]);
+        } else {
+            console.log(`[Blog] Skipped (not accessible): ${posts[idx].url}`);
         }
-    }
+    });
 
-    console.log(`[Blog] Verified ${verified.length}/${posts.length} URLs`);
+    console.log(`[Blog] Verified ${verified.length}/${posts.length} editorial URLs`);
     return verified;
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+    const results = new Array(items.length);
+    let pointer = 0;
+
+    const worker = async () => {
+        while (pointer < items.length) {
+            const idx = pointer++;
+            results[idx] = await mapper(items[idx], idx);
+        }
+    };
+
+    await Promise.all(
+        Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+    );
+    return results;
 }
 
 // ============================================
 // MAIN: Find top 10 blogs and scrape full content
 // ============================================
 async function getBlogPosts(domain, limit = 10) {
-    console.log(`[Blog] ═══ Finding TOP ${limit} blog posts for: ${domain} ═══`);
+    console.log(`[Blog] ═══ Finding TOP ${limit} EDITORIAL_CONTENT items for: ${domain} ═══`);
 
     let posts = [];
 
-    // STRATEGY 1: Direct scraping + Sitemap (most reliable)
-    // This actually crawls the site and finds real URLs
-    console.log("[Blog] Step 1: Crawling site and sitemaps for blog URLs...");
-    posts = await findBlogsFromScraping(domain, limit);
-    console.log(`[Blog] Scraping found ${posts.length} blog posts`);
+    // STRATEGY 1: OpenAI web search (MOST EFFECTIVE)
+    // Uses semantic search to find editorial articles, even "orphaned" ones
+    console.log("[Blog] Step 1: Using OpenAI web search to find articles...");
+    posts = await findBlogsWithOpenAI(domain, limit);
+    console.log(`[Blog] OpenAI found ${posts.length} blog posts`);
 
-    // STRATEGY 2: OpenAI web search (fallback for additional posts)
-    // Only if we found too few posts from scraping
-    if (posts.length < 8) {
-        console.log("[Blog] Step 2: Trying OpenAI web search to find more posts...");
-        const aiPosts = await findBlogsWithOpenAI(domain, limit);
+    // STRATEGY 2: Direct scraping + Sitemap (fallback)
+    // Traditional crawling for sites with clear blog structure
+    if (posts.length === 0) {
+        console.log("[Blog] Step 2: Trying sitemap and page scraping...");
+        const scrapedPosts = await findBlogsFromScraping(domain, limit);
+        
+        if (scrapedPosts.length > 0) {
+            posts = scrapedPosts;
+            console.log(`[Blog] Scraping found ${posts.length} posts`);
+        }
+    }
 
-        if (aiPosts.length > 0) {
-            // Merge, avoiding duplicates (use normalized URLs for comparison)
-            const existingUrls = new Set(posts.map(p => normalizeUrl(p.url)));
-            for (const post of aiPosts) {
-                if (!existingUrls.has(normalizeUrl(post.url))) {
-                    existingUrls.add(normalizeUrl(post.url));
-                    posts.push(post);
-                }
-            }
-            console.log(`[Blog] After OpenAI merge: ${posts.length} total posts`);
+    // STRATEGY 3: Puppeteer for JS-rendered pages (Next.js, React apps)
+    // Use when nothing else worked (likely a dynamic SPA)
+    if (posts.length === 0 && puppeteer) {
+        console.log("[Blog] Step 3: Trying Puppeteer for JS-rendered content...");
+        const puppeteerPosts = await findBlogsWithPuppeteer(domain, limit);
+        
+        if (puppeteerPosts.length > 0) {
+            posts = puppeteerPosts;
+            console.log(`[Blog] Puppeteer found ${posts.length} editorial items from dynamic content`);
         }
     }
 
@@ -580,12 +981,27 @@ async function getBlogPosts(domain, limit = 10) {
 
     // Scrape full content for each post
     if (posts.length > 0) {
-        console.log(`[Blog] Scraping full content for ${posts.length} posts...`);
+        const scrapeConcurrency = Math.max(1, Number(process.env.BLOG_SCRAPE_CONCURRENCY || 5));
+        console.log(`[Blog] Scraping full content for ${posts.length} editorial items (concurrency: ${scrapeConcurrency})...`);
+
+        const scrapedByIndex = await mapWithConcurrency(posts, scrapeConcurrency, async (post) => {
+            return scrapeFullBlogContent(post.url);
+        });
 
         const postsWithContent = [];
         for (let i = 0; i < posts.length; i++) {
-            const scraped = await scrapeFullBlogContent(posts[i].url);
+            const scraped = scrapedByIndex[i];
             if (scraped && scraped.content) {
+                // Filter out low-quality or unscrapeable content
+                if (scraped.wordCount < 300) {
+                    console.log(`[Blog] EDITORIAL_DETECTED_BUT_NOT_SCRAPABLE: ${posts[i].url} (${scraped.wordCount} words)`);
+                    continue; // Skip this post - not enough content
+                }
+                
+                // Calculate editorial quality score
+                const score = calculateEditorialScore(posts[i].url, scraped.wordCount);
+                console.log(`[Blog] Editorial score ${score}/4 for: ${posts[i].url}`);
+                
                 postsWithContent.push({
                     ...posts[i],
                     title: scraped.title || posts[i].title,
@@ -597,28 +1013,55 @@ async function getBlogPosts(domain, limit = 10) {
                     image: scraped.image || `https://picsum.photos/seed/blog-${i + 1}/800/400`,
                     wordCount: scraped.wordCount,
                     readingTime: scraped.readingTime,
-                    scrapedAt: scraped.scrapedAt
+                    scrapedAt: scraped.scrapedAt,
+                    editorialScore: score,
+                    contentType: 'EDITORIAL_CONTENT'
                 });
             } else {
-                // Still include post but with placeholder content
-                postsWithContent.push({
-                    ...posts[i],
-                    image: `https://picsum.photos/seed/blog-${i + 1}/800/400`,
-                    content: "Content could not be scraped from this page.",
-                    wordCount: 0,
-                    readingTime: 0
-                });
+                console.log(`[Blog] EDITORIAL_DETECTED_BUT_NOT_SCRAPABLE: ${posts[i].url} (no content)`);
+                // Don't include posts we can't scrape
             }
         }
         posts = postsWithContent;
     }
 
     if (posts.length === 0) {
-        console.log(`[Blog] No blog posts found for ${domain}`);
+        console.log(`[Blog] No editorial content found for ${domain}`);
         return [];
     }
 
-    console.log(`[Blog] ═══ Returning ${posts.length} blog posts with content ═══`);
+    const maxAgeMonths = Math.max(1, Number(process.env.BLOG_MAX_AGE_MONTHS || 12));
+    const beforeFreshness = posts.length;
+    let droppedByAge = 0;
+    let unknownDates = 0;
+
+    posts = posts.filter((post) => {
+        const parsedDate = parsePublishedDate(post.date);
+        if (!parsedDate) {
+            unknownDates += 1;
+            return true;
+        }
+        const keep = isWithinMaxAgeMonths(parsedDate, maxAgeMonths);
+        if (!keep) droppedByAge += 1;
+        return keep;
+    });
+
+    if (beforeFreshness !== posts.length) {
+        console.log(`[Blog] Freshness filter kept ${posts.length}/${beforeFreshness} (maxAgeMonths=${maxAgeMonths}, droppedByAge=${droppedByAge}, unknownDates=${unknownDates})`);
+    } else {
+        console.log(`[Blog] Freshness filter kept all ${posts.length} posts (maxAgeMonths=${maxAgeMonths}, unknownDates=${unknownDates})`);
+    }
+
+    // Sort by editorial score first, then by recency when date exists
+    posts.sort((a, b) => {
+        const scoreDiff = (b.editorialScore || 0) - (a.editorialScore || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        const aTs = parsePublishedDate(a.date)?.getTime() || 0;
+        const bTs = parsePublishedDate(b.date)?.getTime() || 0;
+        return bTs - aTs;
+    });
+
+    console.log(`[Blog] ═══ Returning ${posts.length} EDITORIAL_CONTENT items with content ═══`);
     return posts;
 }
 
