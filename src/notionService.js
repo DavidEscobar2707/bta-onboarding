@@ -44,6 +44,14 @@ function buildRichTextChunks(text, { link = null } = {}) {
     }));
 }
 
+function chunkArray(items, size = 100) {
+    const out = [];
+    for (let i = 0; i < items.length; i += size) {
+        out.push(items.slice(i, i + size));
+    }
+    return out;
+}
+
 function paragraph(text, label = null) {
     if (label) {
         const value = String(text || 'Not available');
@@ -666,7 +674,11 @@ async function submitToNotion(data) {
         console.log(`[Notion] Total blocks: ${children.length}`);
         console.log(`[Notion] Using parent page: ${parentPageId}`);
 
-        // Create as a standalone page under the parent page
+        // Notion API allows max 100 children per request.
+        // Create page with first chunk, then append remaining chunks.
+        const childChunks = chunkArray(children, 100);
+        const initialChildren = childChunks.shift() || [];
+
         const response = await notion.pages.create({
             parent: { page_id: parentPageId },
             icon: { type: 'emoji', emoji: '📋' },
@@ -675,8 +687,20 @@ async function submitToNotion(data) {
                     title: [{ text: { content: `${companyName} - Complete Report ${dateStr}` } }]
                 }
             },
-            children
+            children: initialChildren
         });
+
+        if (childChunks.length > 0) {
+            console.log(`[Notion] Appending ${childChunks.length} additional block batch(es)`);
+            for (let i = 0; i < childChunks.length; i++) {
+                const batch = childChunks[i];
+                await notion.blocks.children.append({
+                    block_id: response.id,
+                    children: batch
+                });
+                console.log(`[Notion] Appended batch ${i + 1}/${childChunks.length} (${batch.length} blocks)`);
+            }
+        }
 
         let verified = false;
         try {
